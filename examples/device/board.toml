@@ -14,7 +14,7 @@ defconfig = "example_defconfig"
 [kernel.prelink]
 tool = "kits/NativePrelink/emit_prelink.py"
 kernel = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf"
-# kernelcache_sha256 = "..."       # optional: refuse any other original kernelcache
+# kernelcache_sha256 = "..."       # refuse any other original kernelcache; required to bind with the recorded storage interface
 slide = "-0x1000000"
 roots = [
   # "com.apple.driver.AppleARMPlatform",   # bundle identifiers kept in the prelinked kernel
