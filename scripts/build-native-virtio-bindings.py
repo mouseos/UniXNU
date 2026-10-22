@@ -23,6 +23,18 @@ audit_path = ROOT / 'build/storage-abi/interface-audit.json'
 # board.toml and the public IOStorageFamily source. Its candidate addresses include the board's prelink slide.
 recorded = not audit_path.is_file()
 audit = json.loads((ROOT / 'scripts/data/native-storage-interface-audit.json' if recorded else audit_path).read_text())
+if recorded:
+    # The record holds addresses of one kernelcache at one slide. unixnu build kernel passes the board's
+    # [kernel.prelink] pins; any other pair, or no pins, would bind wrong addresses.
+    import os
+    pinned_cache = os.environ.get('UNIXNU_PRELINK_KERNELCACHE_SHA256')
+    pinned_slide = os.environ.get('UNIXNU_PRELINK_SLIDE')
+    if not pinned_cache or not pinned_slide:
+        raise SystemExit('The recorded storage interface needs the board [kernel.prelink] kernelcache_sha256 and slide '
+                         '(UNIXNU_PRELINK_KERNELCACHE_SHA256, UNIXNU_PRELINK_SLIDE)')
+    if pinned_cache != audit['kernelcache_sha256'] or int(pinned_slide, 0) != int(audit['slide'], 0):
+        raise SystemExit('The recorded storage interface belongs to kernelcache ' + audit['kernelcache_sha256'] +
+                         ' at slide ' + audit['slide'] + ', not to the board pins')
 component = args.component
 # The block device class of the component; NativeMsdc's controller service publishes NativeMsdcBlock windows.
 block_class = {'NativeMsdc': 'NativeMsdcBlock'}.get(component, component)
