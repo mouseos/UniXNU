@@ -105,6 +105,8 @@ The kernel step prepares the public `IOStorageFamily` headers under `build/stora
 - the original addresses in the pinned kernelcache: the one table whose kernel slots hold the kernel exports of those names, the protected constructor, the base destructor, the `brk #1` bodies of the abstract D1/D0 destructors, the metaclass and its static registration (`IOBlockStorageDevice`, parent `IOService`, sizes `0x90` and `0x88`);
 - the prelinked addresses, by adding the `[kernel.prelink]` slide.
 
+The record binds only for the kernelcache and slide it was derived from. `unixnu build kernel` passes the board's `[kernel.prelink]` `kernelcache_sha256` and `slide` to the archive builders (`UNIXNU_PRELINK_KERNELCACHE_SHA256`, `UNIXNU_PRELINK_SLIDE`); a board that binds storage drivers with the record therefore sets `kernelcache_sha256`, and any other pair stops the build.
+
 To regenerate the record, or to confirm it with `--check` (no file is written; the script fails on a difference):
 
 ```bash
@@ -116,7 +118,7 @@ python3 scripts/record-storage-interface.py --board ../UniXNU-<device>/board.tom
   --xnu out/<device>/tree/refer/xnu --iostoragefamily out/<device>/tree/refer/IOStorageFamily --check
 ```
 
-`--xnu` and `--iostoragefamily` default to `refer/xnu` and `refer/IOStorageFamily` next to the script, as in the build tree. The script needs `clang` and runs on macOS and Linux. On Linux, `unixnu ipsw` decodes the kernelcache with the `lzfse` command when `/usr/bin/compression_tool` is absent.
+`--xnu` and `--iostoragefamily` default to `refer/xnu` and `refer/IOStorageFamily` next to the script, as in the build tree. The script needs `clang` and runs on macOS and Linux.
 
 ## Build sequence
 
