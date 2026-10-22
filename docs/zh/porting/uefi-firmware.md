@@ -65,6 +65,7 @@ pagesize = 4096
 | `uefi_fd.size` | 固件卷精确大小 |
 | `boot_image_kernel.kernel_compression` | shim 和固件卷的压缩方式 |
 | `boot_image_kernel.append_dtb` | 把设备树追加到 kernel 字段 |
+| `boot_image_kernel.mtk_header` | 用 MediaTek LK 镜像头（`KERNEL`、`ROOTFS`，512 字节；gzip 流在设备树前补齐到 512 字节）包装 kernel 和 ramdisk |
 | `boot_image.*` | Android 启动镜像 header 参数 |
 
 固件基址和大小编译进 BootShim，并在打包启动镜像时检查。
