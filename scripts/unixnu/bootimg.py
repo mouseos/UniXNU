@@ -17,6 +17,23 @@ from .config import load_toml
 from .util import Error, log, run, sha256_file, tool
 
 DEFAULTS = {'header_version': 0, 'base': 0, 'kernel_offset': 0x8000, 'tags_offset': 0x1e00000, 'pagesize': 4096}
+# MediaTek LK image header ([boot_image_kernel] mtk_header in the Mu-Silicium device config): 512 bytes in front of the
+# kernel ("KERNEL") and the ramdisk ("ROOTFS"): magic, payload length, 32-byte name, the rest 0xFF. The gzip stream is
+# zero-padded to 512 bytes before the appended device tree. Same layout as build_uefi.py of the Mu-Silicium port.
+MTK_MAGIC, MTK_HEADER, MTK_ALIGN = 0x58881688, 512, 512
+
+
+def mtk_section(name, payload):
+    return struct.pack('<II32s', MTK_MAGIC, len(payload), name).ljust(MTK_HEADER, b'\xff') + payload
+
+
+def mtk_strip(data, name):
+    magic, length, label = struct.unpack_from('<II32s', data)
+    if magic != MTK_MAGIC or label.rstrip(b'\0') != name or length != len(data) - MTK_HEADER:
+        raise Error(f'MediaTek {name.decode()} header does not match its payload')
+    return data[MTK_HEADER:]
+
+
 MKBOOTIMG_FLAGS = ('base', 'kernel_offset', 'tags_offset', 'pagesize', 'header_version', 'ramdisk_offset', 'second_offset', 'cmdline')
 
 
@@ -91,7 +108,13 @@ def build(ctx, uefi, fd, dtb, ramdisk=None, output=None):
         if tree[:4] != b'\xd0\x0d\xfe\xed' or struct.unpack_from('>I', tree, 4)[0] != len(tree):
             raise Error('invalid compiled device tree')
         combined = shim + firmware
-        kernel = gzip.compress(combined, mtime=0) + tree
+        mtk = bool(config.get('boot_image_kernel', {}).get('mtk_header'))
+        packed = gzip.compress(combined, mtime=0)
+        if mtk:
+            packed += bytes(-len(packed) % MTK_ALIGN)
+        kernel = packed + tree
+        if mtk:
+            kernel = mtk_section(b'KERNEL', kernel)
         kernel_path = scratch / 'Image.gz-dtb'
         kernel_path.write_bytes(kernel)
         if ramdisk:
@@ -101,12 +124,18 @@ def build(ctx, uefi, fd, dtb, ramdisk=None, output=None):
         else:
             ramdisk_path = scratch / 'ramdisk'
             ramdisk_path.write_bytes(b'')
+        if mtk:
+            wrapped = scratch / 'ramdisk.mtk'
+            wrapped.write_bytes(mtk_section(b'ROOTFS', ramdisk_path.read_bytes()))
+            ramdisk_source, ramdisk_path = ramdisk_path, wrapped
+        else:
+            ramdisk_source = ramdisk_path
         command = ['python3', mkbootimg, '--kernel', kernel_path, '--ramdisk', ramdisk_path, '-o', out]
         for key in MKBOOTIMG_FLAGS:
             if key in image:
                 command += [f'--{key}', str(image[key])]
         run(command, capture=True)
-        report = verify(out, combined, tree, ramdisk_path, image)
+        report = verify(out, combined, tree, ramdisk_source, image, mtk)
     report.update(image_sha256=sha256_file(out), image_bytes=out.stat().st_size, fd_sha256=sha256_file(fd),
                   dtb_sha256=sha256_file(dtb), shim_bytes=len(shim), hardware_tested=False)
     (out.parent / 'boot.json').write_text(json.dumps(report, indent=2) + '\n')
@@ -114,7 +143,7 @@ def build(ctx, uefi, fd, dtb, ramdisk=None, output=None):
     return out
 
 
-def verify(path, combined, tree, ramdisk_path, image):
+def verify(path, combined, tree, ramdisk_path, image, mtk=False):
     """Unpack the image and compare every part with its input."""
     data = Path(path).read_bytes()
     kernel_size, kernel_address, ramdisk_size, _, second_size, _, tags, page, version, _ = struct.unpack_from('<10I', data, 8)
@@ -123,11 +152,19 @@ def verify(path, combined, tree, ramdisk_path, image):
     if kernel_address != image['base'] + image['kernel_offset'] or tags != image['base'] + image['tags_offset']:
         raise Error('boot image load addresses do not match the requested offsets')
     kernel = data[page:page + kernel_size]
-    unpacker = zlib.decompressobj(16 + zlib.MAX_WBITS)
-    if unpacker.decompress(kernel) != combined or not unpacker.eof or unpacker.unused_data != tree:
-        raise Error('gzip, firmware and appended device tree do not round-trip')
     start = page * (1 + -(-kernel_size // page))
-    if data[start:start + ramdisk_size] != Path(ramdisk_path).read_bytes():
+    ramdisk = data[start:start + ramdisk_size]
+    payload = mtk_strip(kernel, b'KERNEL') if mtk else kernel
+    if mtk:
+        ramdisk = mtk_strip(ramdisk, b'ROOTFS')
+    unpacker = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    rest = unpacker.unused_data if unpacker.decompress(payload) == combined and unpacker.eof else None
+    if mtk and rest is not None:
+        pad = len(rest) - len(tree)
+        rest = rest[pad:] if 0 <= pad < MTK_ALIGN and rest[:pad] == bytes(pad) else None
+    if rest != tree:
+        raise Error('gzip, firmware and appended device tree do not round-trip')
+    if ramdisk != Path(ramdisk_path).read_bytes():
         raise Error('ramdisk bytes differ')
     return {'kernel_sha256': hashlib.sha256(kernel).hexdigest(), 'ramdisk_bytes': ramdisk_size,
             'header_version': version, 'kernel_address': hex(kernel_address), 'tags_address': hex(tags)}
