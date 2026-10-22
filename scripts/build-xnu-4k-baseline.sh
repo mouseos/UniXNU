@@ -530,6 +530,13 @@ if [ "$NATIVE_PAN" != 0 ] && [ "$NATIVE_PAN" != 1 ]; then
   exit 1
 fi
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_PAN=$NATIVE_PAN"
+NS16550_UART=${XNU_NS16550_UART:-0}
+if [ "$NS16550_UART" != 0 ] && [ "$NS16550_UART" != 1 ]; then
+  echo 'XNU_NS16550_UART must be 0 or 1' >&2
+  exit 1
+fi
+# Only a board that selects the flag changes the kernel flags, so other boards keep their incremental builds.
+if [ "$NS16550_UART" = 1 ]; then EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NS16550_UART=1"; fi
 if [ "$NATIVE_PAN" = 1 ]; then
   EXTRA_MAKE_ARGS+=("copyio.o_CFLAGS_ADD=-march=armv8.1-a")
   EXTRA_MAKE_ARGS+=("pcb.o_CFLAGS_ADD=-march=armv8.1-a")
