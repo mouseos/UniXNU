@@ -21,6 +21,7 @@
 | [一加 Ace 5（giulia）](/zh/devices/giulia) | SM8650 | 已到 Hello/Setup 和 GUI 进度条，触控和安装待完成 | jasper2863、tycykp |
 | [小米平板 7 / POCO Pad X1（uke）](/zh/devices/uke) | SM7675 | 根已挂载，launchd 启动；显示 surface 待完成 | Allenwdk |
 | [小米平板 8 Pro（piano）](/zh/devices/piano) | SM8750 | 内核在 CI 编译并预链接，未在平板上运行 | code002-2 |
+| [Benesse TAB-A04-BR3（a04br3）](/zh/devices/a04br3) | MT8167 | 内核、payload、userdata 和启动镜像已在 CI 构建；无人值守 fastboot 测试循环；尚未在平板上运行 | mouseos |
 | [小米 13 Pro（nuwa）](/zh/devices/nuwa) | SM8550 | 源内核可编译，平台静态库和预链接待完成 | wh1stl3 |
 | [一加 13T（oneplus13t）](/zh/devices/oneplus13t) | SM8750 | 已到 XNU S1 到 S6，根设备查找 panic | IssacL04 |
 | [一加平板 2 Pro（erhai）](/zh/devices/erhai) | SM8750 | XNU 入口 bring-up，根和用户态未配置 | wally001012-cyber |
