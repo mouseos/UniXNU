@@ -17,7 +17,12 @@ parser.add_argument('--component', choices=['NativeVirtioBlock', 'NativeRamBlock
 parser.add_argument('--directory', type=Path, default=ROOT / 'build/native-virtio-block')
 args = parser.parse_args()
 out = args.directory.resolve()
-audit = json.loads((ROOT / 'build/storage-abi/interface-audit.json').read_text())
+audit_path = ROOT / 'build/storage-abi/interface-audit.json'
+# Without the qualification evidence of audit-storage-interface.py (prelinked candidate, debugger snapshot, AES audit),
+# bind with the record of scripts/record-storage-interface.py, derived statically from the kernelcache pinned in
+# board.toml and the public IOStorageFamily source. Its candidate addresses include the board's prelink slide.
+recorded = not audit_path.is_file()
+audit = json.loads((ROOT / 'scripts/data/native-storage-interface-audit.json' if recorded else audit_path).read_text())
 component = args.component
 # The block device class of the component; NativeMsdc's controller service publishes NativeMsdcBlock windows.
 block_class = {'NativeMsdc': 'NativeMsdcBlock'}.get(component, component)
@@ -25,7 +30,9 @@ mangled = str(len(block_class)) + block_class
 obj_path = out / (component + '.o')
 obj = obj_path.read_bytes()
 image = np.macho(obj)
-if not audit['live_native_4k'] or audit['method_slots'] != 190 or not audit['abstract_complete_destructors_trap']:
+qualified = (audit['metaclass_registration']['class_size'] == 0x90 and audit['metaclass_registration']['superclass_size'] == 0x88
+             if recorded else audit['live_native_4k'])
+if not qualified or audit['method_slots'] != 190 or not audit['abstract_complete_destructors_trap']:
     raise SystemExit('First qualify original live storage metadata and its real base functions')
 offset = next(at for cmd, at, size in image['commands'] if cmd == 2)
 sy, count, st, _ = struct.unpack_from('<4I', obj, offset + 8)
@@ -63,7 +70,14 @@ for row, actual in zip(audit['methods'], compiled):
 kernel_path = ROOT / 'build/native-prelink/native-apfs-load-positive.macho'
 # The binding values come from the recorded audit; the candidate only proves the audit's identity. Build products are pruned, so a
 # missing candidate is accepted (the audit JSON is the pinned record) while a present one must still match.
-if kernel_path.exists() and hashlib.sha256(kernel_path.read_bytes()).hexdigest() != audit['candidate_sha256']:
+if recorded:
+    # The record names the original kernelcache and slide; a present candidate plan must have been prelinked from them.
+    plan_path = kernel_path.with_suffix('.json')
+    if plan_path.exists():
+        plan = json.loads(plan_path.read_text())
+        if plan['original_sha256'] != audit['kernelcache_sha256'] or plan['slide'] != int(audit['slide'], 0):
+            raise SystemExit('Original binding input identity changed')
+elif kernel_path.exists() and hashlib.sha256(kernel_path.read_bytes()).hexdigest() != audit['candidate_sha256']:
     raise SystemExit('Original binding input identity changed')
 possible = {r['reference_name']: int(r['candidate_target'], 16) for r in audit['methods'] if not r['kernel_names']}
 possible.update({'__ZN20IOBlockStorageDeviceC2EPK11OSMetaClass': int(audit['original_protected_constructor'], 16),
@@ -84,7 +98,9 @@ subprocess.run(['xcrun', 'clang', '-target', 'arm64-apple-ios17.0', '-Werror', '
 archive = out / ('lib' + component + '.a')
 archive.unlink(missing_ok=True)
 subprocess.run(['xcrun', 'ar', 'rcs', archive, obj_path, out / 'original-bindings.o'], check=True)
-(out / 'bindings.json').write_text(json.dumps(dict(original_candidate_sha256=audit['candidate_sha256'],
+identity = (dict(original_kernelcache_sha256=audit['kernelcache_sha256'], original_slide=audit['slide'], recorded_audit=True)
+            if recorded else dict(original_candidate_sha256=audit['candidate_sha256']))
+(out / 'bindings.json').write_text(json.dumps(dict(**identity,
     compiled_object_sha256=hashlib.sha256(obj).hexdigest(), virtual_methods_checked=190,
     concrete_overrides=overrides, unresolved_original_imports=0,
     bindings={name: hex(value) for name, value in bindings.items()}, original_code_modified=False,
