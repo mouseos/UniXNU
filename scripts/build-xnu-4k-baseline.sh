@@ -544,13 +544,14 @@ if [ "$NS16550_UART" != 0 ] && [ "$NS16550_UART" != 1 ]; then
   echo 'XNU_NS16550_UART must be 0 or 1' >&2
   exit 1
 fi
-EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NS16550_UART=$NS16550_UART"
+# Only a board that selects the flag changes the kernel flags, so other boards keep their incremental builds.
+if [ "$NS16550_UART" = 1 ]; then EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NS16550_UART=1"; fi
 BOARD_INIT=${XNU_BOARD_INIT:-0}
 if [ "$BOARD_INIT" != 0 ] && [ "$BOARD_INIT" != 1 ]; then
   echo 'XNU_BOARD_INIT must be 0 or 1' >&2
   exit 1
 fi
-EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOARD_INIT=$BOARD_INIT"
+if [ "$BOARD_INIT" = 1 ]; then EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOARD_INIT=1"; fi
 if [ "$NATIVE_PAN" = 1 ]; then
   EXTRA_MAKE_ARGS+=("copyio.o_CFLAGS_ADD=-march=armv8.1-a")
   EXTRA_MAKE_ARGS+=("pcb.o_CFLAGS_ADD=-march=armv8.1-a")
@@ -789,6 +790,14 @@ PY_BINDINGS
     KERNEL_ARCHIVE_DEPENDENCIES="$KERNEL_ARCHIVE_DEPENDENCIES $ROOT/build/boot-progress/libBootProgress.a"
   fi
   KERNEL_EXTRA_ARCHIVES="$KERNEL_EXTRA_ARCHIVES ${XNU_EXTRA_LD_ARCHIVES:-}"
+  # Archives named in XNU_EXTRA_LD_ARCHIVES (plain paths or -Wl,-force_load,PATH) are link dependencies too, so an
+  # updated board archive relinks the kernel.
+  for EXTRA_ARCHIVE in ${XNU_EXTRA_LD_ARCHIVES:-}; do
+    case "$EXTRA_ARCHIVE" in
+      -Wl,-force_load,*) KERNEL_ARCHIVE_DEPENDENCIES="$KERNEL_ARCHIVE_DEPENDENCIES ${EXTRA_ARCHIVE#-Wl,-force_load,}" ;;
+      *.a) KERNEL_ARCHIVE_DEPENDENCIES="$KERNEL_ARCHIVE_DEPENDENCIES $EXTRA_ARCHIVE" ;;
+    esac
+  done
   EXTRA_MAKE_ARGS+=("LD_KERNEL_ARCHIVES=$KERNEL_EXTRA_ARCHIVES")
   EXTRA_MAKE_ARGS+=("XNU_EXTERNAL_KERNEL_ARCHIVES=$KERNEL_ARCHIVE_DEPENDENCIES")
 fi
