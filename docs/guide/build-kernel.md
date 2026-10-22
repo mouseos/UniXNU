@@ -60,6 +60,7 @@ Each `CONFIG_XNU_<NAME>` line becomes `XNU_<NAME>` in the kernel build environme
 | `XNU_ARMVIRT_PLATFORM` | Links the QEMU virt platform expert | `build/armvirt-platform/libArmVirtPlatform.a` |
 | `XNU_ARMCPU` | Links the architectural CPU and interrupt provider | `build/armcpu/libArmCpu.a` |
 | `XNU_NATIVE_UFS` | Links the UFS storage driver | `build/native-ufs/libNativeUfs.a` |
+| `XNU_NATIVE_MSDC` | Links the MediaTek MT8167 MSDC eMMC storage driver | `build/native-msdc/libNativeMsdc.a` |
 | `XNU_NATIVE_AES` | Links the AES accelerator driver | `build/native-aes/libNativeAES.a` |
 | `XNU_NATIVE_VIRTIO_BLOCK` | Links the VirtIO block driver | `XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE` or `build/native-virtio-block/libNativeVirtioBlock.a` |
 | `XNU_NATIVE_RAM_BLOCK` | Links the RAM block driver | `build/native-ram-block/libNativeRamBlock.a` |
