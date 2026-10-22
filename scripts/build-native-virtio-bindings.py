@@ -13,13 +13,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'kits/NativePrelink'))
 import native_prelink as np
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--component', choices=['NativeVirtioBlock', 'NativeRamBlock'], default='NativeVirtioBlock')
+parser.add_argument('--component', choices=['NativeVirtioBlock', 'NativeRamBlock', 'NativeMsdc'], default='NativeVirtioBlock')
 parser.add_argument('--directory', type=Path, default=ROOT / 'build/native-virtio-block')
 args = parser.parse_args()
 out = args.directory.resolve()
 audit = json.loads((ROOT / 'build/storage-abi/interface-audit.json').read_text())
 component = args.component
-mangled = str(len(component)) + component
+# The block device class of the component; NativeMsdc's controller service publishes NativeMsdcBlock windows.
+block_class = {'NativeMsdc': 'NativeMsdcBlock'}.get(component, component)
+mangled = str(len(block_class)) + block_class
 obj_path = out / (component + '.o')
 obj = obj_path.read_bytes()
 image = np.macho(obj)
