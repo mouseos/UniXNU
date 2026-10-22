@@ -536,6 +536,12 @@ if [ "$NS16550_UART" != 0 ] && [ "$NS16550_UART" != 1 ]; then
   exit 1
 fi
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NS16550_UART=$NS16550_UART"
+BOARD_INIT=${XNU_BOARD_INIT:-0}
+if [ "$BOARD_INIT" != 0 ] && [ "$BOARD_INIT" != 1 ]; then
+  echo 'XNU_BOARD_INIT must be 0 or 1' >&2
+  exit 1
+fi
+EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOARD_INIT=$BOARD_INIT"
 if [ "$NATIVE_PAN" = 1 ]; then
   EXTRA_MAKE_ARGS+=("copyio.o_CFLAGS_ADD=-march=armv8.1-a")
   EXTRA_MAKE_ARGS+=("pcb.o_CFLAGS_ADD=-march=armv8.1-a")
