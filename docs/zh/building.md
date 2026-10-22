@@ -147,7 +147,7 @@ IPSW 按成员读取，远程 IPSW 不会整体下载。zip 目录和需要的�
 5. 为 `ARM64`、机型 `BCM2837`、配置 `DEVELOPMENT`、iOS 17 构建 XNU，并链接静态库。
 6. 用 `kits/NativePrelink` 把原生内核与原始 kernelcache 预链接。重建会替换上一轮的结果。
 
-kernelcache 来自 IPSW，除非 `--kernelcache` 指定文件。`KernelCache` IM4P 的 LZFSE 负载由 macOS `compression_tool` 解码，选出 arm64 切片，并按 `[kernel.prelink] kernelcache_sha256` 校验。
+kernelcache 来自 IPSW，除非 `--kernelcache` 指定文件。`KernelCache` IM4P 的 LZFSE 负载由 macOS `compression_tool` 解码（Linux 上没有该工具时使用 `lzfse` 命令），选出 arm64 切片，并按 `[kernel.prelink] kernelcache_sha256` 校验。
 
 输出为 `out/<board>/kernel/kernel.macho`。
 

@@ -147,7 +147,7 @@ The kernel step:
 5. Builds XNU for `ARM64`, machine `BCM2837`, configuration `DEVELOPMENT`, iOS 17, and links the archives.
 6. Prelinks the native kernel against the original kernelcache with `kits/NativePrelink`. A rebuild replaces the earlier candidate.
 
-The kernelcache comes from the IPSW unless `--kernelcache` supplies one. The LZFSE payload of the `KernelCache` IM4P is decoded with macOS `compression_tool`, the arm64 slice is selected, and the result is checked against `[kernel.prelink] kernelcache_sha256`.
+The kernelcache comes from the IPSW unless `--kernelcache` supplies one. The LZFSE payload of the `KernelCache` IM4P is decoded with macOS `compression_tool` (on Linux, where it is absent, with the `lzfse` command), the arm64 slice is selected, and the result is checked against `[kernel.prelink] kernelcache_sha256`.
 
 The output is `out/<board>/kernel/kernel.macho`.
 
