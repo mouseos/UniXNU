@@ -21,6 +21,7 @@ The ports listed here are independent. Their maintainers own the repositories; t
 | [OnePlus Ace 5 (giulia)](/devices/giulia) | SM8650 | Hello/Setup and GUI progress reached; touch and installation pending | jasper2863, tycykp |
 | [Xiaomi Pad 7 / POCO Pad X1 (uke)](/devices/uke) | SM7675 | Root mounted and launchd starts; display surface pending | Allenwdk |
 | [Xiaomi Pad 8 Pro (piano)](/devices/piano) | SM8750 | Kernel builds and prelinks in CI; not run on the tablet | code002-2 |
+| [Benesse TAB-A04-BR3 (a04br3)](/devices/a04br3) | MT8167 | Kernel, payload, userdata and boot image built in CI; unattended fastboot test cycle; not run on the tablet yet | mouseos |
 | [Xiaomi 13 Pro (nuwa)](/devices/nuwa) | SM8550 | Source kernel builds; platform archives and prelink pending | wh1stl3 |
 | [OnePlus 13T (oneplus13t)](/devices/oneplus13t) | SM8750 | XNU S1 to S6 reached; root device search panics | IssacL04 |
 | [OnePlus Pad 2 Pro (erhai)](/devices/erhai) | SM8750 | XNU entry bring-up; root and userland not configured | wally001012-cyber |
