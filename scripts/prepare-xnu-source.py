@@ -15,6 +15,16 @@ CACHE = Path(f'.cache/sources/xnu-driverkit-{TAG.removeprefix("xnu-")}.json')
 URL = f'https://api.github.com/repos/apple-oss-distributions/xnu/contents/iokit/DriverKit?ref={TAG}'
 
 
+def fetch(url):
+    """GET url; with GITHUB_TOKEN set (the Actions token) the GitHub API counts the request against that token instead of the
+    small anonymous per-IP quota that shared runners exhaust (HTTP 403 rate limit exceeded)."""
+    request = urllib.request.Request(url)
+    token = os.environ.get('GITHUB_TOKEN')
+    if token and url.startswith('https://api.github.com/'):
+        request.add_header('Authorization', 'Bearer ' + token)
+    return urllib.request.urlopen(request, timeout=30).read()
+
+
 def restore(entry, destination=DESTINATION, tag=TAG):
     if entry['type'] != 'file' or not entry['name'].endswith('.h'):
         return None
@@ -37,12 +47,12 @@ if __name__ == '__main__':
         raise SystemExit('Create the local XNU work source before preparing headers')
     if not CACHE.exists():
         CACHE.parent.mkdir(parents=True, exist_ok=True)
-        CACHE.write_bytes(urllib.request.urlopen(URL, timeout=30).read())
+        CACHE.write_bytes(fetch(URL))
     entries = json.loads(CACHE.read_text())
     crypto_cache = CACHE.with_name(f'xnu-driverkit-crypto-{TAG.removeprefix("xnu-")}.json')
     if not crypto_cache.exists():
         crypto_url = URL.replace('/DriverKit?', '/DriverKit/crypto?')
-        crypto_cache.write_bytes(urllib.request.urlopen(crypto_url, timeout=30).read())
+        crypto_cache.write_bytes(fetch(crypto_url))
     for entry in json.loads(crypto_cache.read_text()):
         entry['relative'] = 'crypto/' + entry['name']
         entries.append(entry)
