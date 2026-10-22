@@ -244,6 +244,7 @@ A driver that fails `start()` releases its resources and returns `false`.
 | `ArmDTPlatform` | Platform expert and device nubs |
 | `ArmCpu` | CPU, GIC and timer |
 | `NativeUfs` | Storage, SMMU and command queues |
+| `NativeMsdc` | MediaTek MSDC eMMC: polled transfers, read-only block windows bound to the original storage class |
 | `NativeAES` | Accelerator subclass with original ABI |
 | `NativeAdreno` | GPU power, GMU firmware, native 4 KiB SMMU, rings and user client |
 | `NativeMetal` | Metal API frontend and metal2vulkan translation to Turnip |

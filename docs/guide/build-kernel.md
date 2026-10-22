@@ -60,6 +60,7 @@ Each `CONFIG_XNU_<NAME>` line becomes `XNU_<NAME>` in the kernel build environme
 | `XNU_ARMVIRT_PLATFORM` | Links the QEMU virt platform expert | `build/armvirt-platform/libArmVirtPlatform.a` |
 | `XNU_ARMCPU` | Links the architectural CPU and interrupt provider | `build/armcpu/libArmCpu.a` |
 | `XNU_NATIVE_UFS` | Links the UFS storage driver | `build/native-ufs/libNativeUfs.a` |
+| `XNU_NATIVE_MSDC` | Links the MediaTek MT8167 MSDC eMMC storage driver | `build/native-msdc/libNativeMsdc.a` |
 | `XNU_NATIVE_AES` | Links the AES accelerator driver | `build/native-aes/libNativeAES.a` |
 | `XNU_NATIVE_VIRTIO_BLOCK` | Links the VirtIO block driver | `XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE` or `build/native-virtio-block/libNativeVirtioBlock.a` |
 | `XNU_NATIVE_RAM_BLOCK` | Links the RAM block driver | `build/native-ram-block/libNativeRamBlock.a` |
@@ -99,6 +100,27 @@ The builders read symbol names through `scripts/xnu_symbols.py`. It uses the rec
 The kernel step prepares the public `IOStorageFamily` headers under `build/storage-abi/include` before the archive builders.
 
 `build-native-aes-bindings.py` and `build-native-adreno-accelerator.py` use the recorded audit results in `scripts/data/` when the original hardware evidence is absent. The recorded addresses belong to the kernelcache pinned in `board.toml`.
+
+`build-native-virtio-bindings.py` binds `NativeVirtioBlock`, `NativeRamBlock` and the `NativeMsdc` windows to the original `IOBlockStorageDevice` of IOStorageFamily. Without `build/storage-abi/interface-audit.json` from `audit-storage-interface.py` it uses `scripts/data/native-storage-interface-audit.json`. That record holds addresses and symbol names only. `scripts/record-storage-interface.py` derives it from public inputs:
+
+- the reference name of each of the 190 dispatch slots, from `IOBlockStorageDevice.cpp` of the pinned IOStorageFamily source compiled against the xnu headers of `feeds.toml` (the object is inspected, never linked);
+- the original addresses in the pinned kernelcache: the one table whose kernel slots hold the kernel exports of those names, the protected constructor, the base destructor, the `brk #1` bodies of the abstract D1/D0 destructors, the metaclass and its static registration (`IOBlockStorageDevice`, parent `IOService`, sizes `0x90` and `0x88`);
+- the prelinked addresses, by adding the `[kernel.prelink]` slide.
+
+The record binds only for the kernelcache and slide it was derived from. `unixnu build kernel` passes the board's `[kernel.prelink]` `kernelcache_sha256` and `slide` to the archive builders (`UNIXNU_PRELINK_KERNELCACHE_SHA256`, `UNIXNU_PRELINK_SLIDE`); a board that binds storage drivers with the record therefore sets `kernelcache_sha256`, and any other pair stops the build.
+
+To regenerate the record, or to confirm it with `--check` (no file is written; the script fails on a difference):
+
+```bash
+./unixnu fetch -D ../UniXNU-<device>
+./unixnu tree -D ../UniXNU-<device>
+./unixnu ipsw fetch KernelCache -D ../UniXNU-<device>
+python3 scripts/record-storage-interface.py --board ../UniXNU-<device>/board.toml \
+  --kernelcache out/ipsw/<build>/kernelcache.decompressed \
+  --xnu out/<device>/tree/refer/xnu --iostoragefamily out/<device>/tree/refer/IOStorageFamily --check
+```
+
+`--xnu` and `--iostoragefamily` default to `refer/xnu` and `refer/IOStorageFamily` next to the script, as in the build tree. The script needs `clang` and runs on macOS and Linux.
 
 ## Build sequence
 

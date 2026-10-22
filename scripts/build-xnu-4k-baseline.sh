@@ -189,6 +189,15 @@ fi
 if [ "${XNU_NATIVE_UFS:-0}" = 1 ]; then
   PERSONALITY_CFLAGS="$PERSONALITY_CFLAGS -DXNU_NATIVE_UFS=1"
 fi
+# MediaTek MT8167 MSDC eMMC storage (drivers/NativeMsdc): personality and archive, off by default.
+NATIVE_MSDC=${XNU_NATIVE_MSDC:-0}
+if [ "$NATIVE_MSDC" != 0 ] && [ "$NATIVE_MSDC" != 1 ]; then
+  echo 'XNU_NATIVE_MSDC must be 0 or 1' >&2
+  exit 1
+fi
+if [ "$NATIVE_MSDC" = 1 ]; then
+  PERSONALITY_CFLAGS="$PERSONALITY_CFLAGS -DXNU_NATIVE_MSDC=1"
+fi
 NATIVE_VIRTIO_CONSOLE=${XNU_NATIVE_VIRTIO_CONSOLE:-0}
 if [ "$NATIVE_VIRTIO_CONSOLE" != 0 ] && [ "$NATIVE_VIRTIO_CONSOLE" != 1 ]; then
   echo 'XNU_NATIVE_VIRTIO_CONSOLE must be 0 or 1' >&2
@@ -608,6 +617,44 @@ if [ "${XNU_SOURCE_CORECRYPTO14:-0}" = 1 ] && [ "$BOOTSTRAP" = 0 ]; then
     KERNEL_EXTRA_ARCHIVES="$KERNEL_EXTRA_ARCHIVES -Wl,-force_load,$UFS_ARCHIVE"
     KERNEL_ARCHIVE_DEPENDENCIES="$KERNEL_ARCHIVE_DEPENDENCIES $UFS_ARCHIVE"
   fi
+  if [ "$NATIVE_MSDC" = 1 ]; then
+    MSDC_ARCHIVE=$ROOT/build/native-msdc/libNativeMsdc.a
+    test -f "$MSDC_ARCHIVE"
+    # With its window block devices the archive also carries the original storage aliases
+    # (build-native-virtio-bindings.py --component NativeMsdc). When VirtIO block or the RAM block
+    # already defines them, link only the object, and only if every import has the same value.
+    MSDC_BINDINGS=$ROOT/build/native-msdc/bindings.json
+    if [ -f "$MSDC_BINDINGS" ] && { [ "${XNU_NATIVE_VIRTIO_BLOCK:-0}" = 1 ] || [ "$NATIVE_RAM_BLOCK" = 1 ]; }; then
+      if [ "${XNU_NATIVE_VIRTIO_BLOCK:-0}" = 1 ]; then
+        STORAGE_ALIAS_ARCHIVE=${XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE:-$ROOT/build/native-virtio-block/libNativeVirtioBlock.a}
+      else
+        STORAGE_ALIAS_ARCHIVE=$ROOT/build/native-ram-block/libNativeRamBlock.a
+      fi
+      python3 - "$STORAGE_ALIAS_ARCHIVE" "$MSDC_ARCHIVE" <<'PY_MSDC_BINDINGS'
+import hashlib
+import json
+from pathlib import Path
+import sys
+records = []
+for archive in sys.argv[1:]:
+    path = Path(archive)
+    record = json.loads(path.with_name('bindings.json').read_text())
+    obj = path.with_name(path.stem.removeprefix('lib') + '.o')
+    if hashlib.sha256(obj.read_bytes()).hexdigest() != record['compiled_object_sha256']:
+        raise SystemExit('Re-audit the actual compiled storage object before linking')
+    records.append(record['bindings'])
+first, second = records
+if any(first.get(name) != value for name, value in second.items()):
+    raise SystemExit('NativeMsdc storage imports must match the already linked original storage bindings')
+PY_MSDC_BINDINGS
+      MSDC_OBJECT=$ROOT/build/native-msdc/NativeMsdc.o
+      test -f "$MSDC_OBJECT"
+      KERNEL_EXTRA_ARCHIVES="$KERNEL_EXTRA_ARCHIVES $MSDC_OBJECT"
+    else
+      KERNEL_EXTRA_ARCHIVES="$KERNEL_EXTRA_ARCHIVES -Wl,-force_load,$MSDC_ARCHIVE"
+    fi
+    KERNEL_ARCHIVE_DEPENDENCIES="$KERNEL_ARCHIVE_DEPENDENCIES $MSDC_ARCHIVE"
+  fi
   if [ "${XNU_NATIVE_ADRENO:-0}" = 1 ]; then
     # NativeAdreno plus its kits (scripts/build-native-adreno-kits.py). No personality is installed: the
     # board probe calls NativeAdrenoGmuContextBringup directly once it has powered the GPU CX domain.
@@ -765,7 +812,8 @@ python3 - "${XNU_NATIVE_AES:-0}" "${XNU_NATIVE_AES_ARCHIVE:-$ROOT/build/native-a
   "$NATIVE_VIRTIO_CONSOLE" "$ROOT/build/native-virtio-console/libNativeVirtioConsole.a" \
   "$NATIVE_OFFLINE_GPU" "$ROOT/build/native-offline-gpu/libNativeOfflineGPU.late.a" \
   "$SHENG_PMGR" "$ROOT/build/sheng-platform-power/libShengPlatformPower.a" \
-  "${XNU_NATIVE_ADRENO:-0}" "$ROOT/build/native-adreno/libNativeAdreno.a" <<'PY'
+  "${XNU_NATIVE_ADRENO:-0}" "$ROOT/build/native-adreno/libNativeAdreno.a" \
+  "$NATIVE_MSDC" "$ROOT/build/native-msdc/libNativeMsdc.a" <<'PY'
 import hashlib
 from pathlib import Path
 import sys

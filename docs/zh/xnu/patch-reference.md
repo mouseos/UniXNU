@@ -49,6 +49,7 @@
 | `source-corecrypto14-bootstrap` | 早期启动时注册源码 corecrypto |
 | `source-pthread-bootstrap` | 早期启动时注册源码 pthread |
 | `native-aes-personality` | 加入 AES、VirtIO 块、VirtIO 控制台、RAM 块和 UFS personality |
+| `native-msdc-personality` | `XNU_NATIVE_MSDC=1` 时加入 MediaTek MT8167 MSDC eMMC personality |
 | `offline-owner-root-crypto-probe` | 设置 `offline-owner-root-check` 时启动 verified root 探针 |
 | `offline-owner-root-binding-audit` | 比较挂载根设备和 verified root 设备 |
 | `offline-owner-boot-manifest` | 从根和 cache 设备发布 owner 启动 manifest 哈希 |
