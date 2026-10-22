@@ -202,14 +202,19 @@ def kernelcache(ctx, source):
     pin = spec.get('kernelcache_sha256')
     if out.is_file() and (pin is None or sha256_file(out) == pin):
         return out
-    tool('compression_tool', 'macOS /usr/bin/compression_tool decodes the LZFSE kernelcache')
     source.cache.mkdir(parents=True, exist_ok=True)
     payload = im4p_payload(source.read('KernelCache'))
     packed, raw = source.cache / 'kernelcache.lzfse', source.cache / 'kernelcache.fat'
     packed.write_bytes(payload)
-    result = subprocess.run(['/usr/bin/compression_tool', '-decode', '-a', 'lzfse', '-i', packed, '-o', raw], capture_output=True, text=True)
+    # macOS decodes with /usr/bin/compression_tool; elsewhere the reference lzfse command (github.com/lzfse/lzfse) does the same.
+    if Path('/usr/bin/compression_tool').is_file():
+        command = ['/usr/bin/compression_tool', '-decode', '-a', 'lzfse', '-i', packed, '-o', raw]
+    else:
+        command = [tool('lzfse', 'macOS /usr/bin/compression_tool or the lzfse command decodes the LZFSE kernelcache'),
+                   '-decode', '-i', packed, '-o', raw]
+    result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode:
-        raise Error(f'compression_tool failed: {result.stderr.strip()}')
+        raise Error(f'{Path(command[0]).name} failed: {result.stderr.strip()}')
     fat = raw.read_bytes()
     if fat[:4] == b'\xca\xfe\xba\xbe':
         count = struct.unpack('>I', fat[4:8])[0]
