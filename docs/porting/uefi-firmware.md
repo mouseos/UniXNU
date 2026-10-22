@@ -65,6 +65,7 @@ pagesize = 4096
 | `uefi_fd.size` | Exact firmware volume size |
 | `boot_image_kernel.kernel_compression` | Compression of the shim and firmware volume |
 | `boot_image_kernel.append_dtb` | Append the device tree to the kernel field |
+| `boot_image_kernel.mtk_header` | Wrap the kernel and ramdisk in MediaTek LK image headers (`KERNEL`, `ROOTFS`; 512 bytes, the gzip stream padded to 512 bytes before the device tree) |
 | `boot_image.*` | Android boot image header parameters |
 
 The firmware base and size are compiled into BootShim. They are also checked when the boot image is packed.
