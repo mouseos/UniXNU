@@ -244,6 +244,7 @@ Provider 需要发布中断控制器或中断资源。通用 ARM64 平台上 `Ar
 | `ArmDTPlatform` | 平台专家和设备 nub |
 | `ArmCpu` | CPU、GIC 和定时器 |
 | `NativeUfs` | 存储、SMMU 和命令队列 |
+| `NativeMsdc` | MediaTek MSDC eMMC：轮询传输，绑定原始存储类的只读块窗口 |
 | `NativeAES` | 带原始 ABI 的加速器子类 |
 | `NativeAdreno` | GPU 电源、GMU 固件、原生 4 KiB SMMU、ring 和 user client |
 | `NativeMetal` | Metal API 前端和到 Turnip 的 metal2vulkan 翻译 |
