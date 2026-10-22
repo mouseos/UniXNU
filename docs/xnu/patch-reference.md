@@ -47,6 +47,7 @@ Patches apply in name order from `patches/xnu/*.patch` and `kits/NativePrelink/p
 | `source-corecrypto14-bootstrap` | Registers the source corecrypto provider at early boot |
 | `source-pthread-bootstrap` | Registers the source pthread component at early boot |
 | `native-aes-personality` | Adds the AES, VirtIO block, VirtIO console, RAM block and UFS personalities |
+| `native-msdc-personality` | Adds the MediaTek MT8167 MSDC eMMC personality when `XNU_NATIVE_MSDC=1` |
 | `offline-owner-root-crypto-probe` | Starts the verified root probe when `offline-owner-root-check` is set |
 | `offline-owner-root-binding-audit` | Compares the mounted root device with the verified root device |
 | `offline-owner-boot-manifest` | Publishes the owner boot manifest hash from the root and cache devices |

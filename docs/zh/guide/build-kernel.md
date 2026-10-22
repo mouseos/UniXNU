@@ -60,6 +60,7 @@ DEPLOYMENT_TARGET_FLAGS="-miphoneos-version-min=17.0 -DXNU_TARGET_OS_IOS"
 | `XNU_ARMVIRT_PLATFORM` | 链接 QEMU virt 平台专家 | `build/armvirt-platform/libArmVirtPlatform.a` |
 | `XNU_ARMCPU` | 链接 CPU 与中断控制器 | `build/armcpu/libArmCpu.a` |
 | `XNU_NATIVE_UFS` | 链接 UFS 存储驱动 | `build/native-ufs/libNativeUfs.a` |
+| `XNU_NATIVE_MSDC` | 链接 MediaTek MT8167 MSDC eMMC 存储驱动 | `build/native-msdc/libNativeMsdc.a` |
 | `XNU_NATIVE_AES` | 链接 AES 加速器驱动 | `build/native-aes/libNativeAES.a` |
 | `XNU_NATIVE_VIRTIO_BLOCK` | 链接 VirtIO 块驱动 | `XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE` 或 `build/native-virtio-block/libNativeVirtioBlock.a` |
 | `XNU_NATIVE_RAM_BLOCK` | 链接 RAM 块驱动 | `build/native-ram-block/libNativeRamBlock.a` |
