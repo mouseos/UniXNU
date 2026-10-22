@@ -105,6 +105,8 @@ archives = [
 - 固定 kernelcache 中的原始地址：内核槽位恰好指向这些名称的内核导出的唯一分派表、受保护构造函数、基类析构函数、抽象 D1/D0 析构函数的 `brk #1`、元类及其静态注册（`IOBlockStorageDevice`、父类 `IOService`、大小 `0x90` 和 `0x88`）；
 - 预链接地址：加上 `[kernel.prelink]` 的 slide。
 
+该记录只对其来源的 kernelcache 与 slide 生效。`unixnu build kernel` 会把板级 `[kernel.prelink]` 的 `kernelcache_sha256` 与 `slide` 传给归档构建脚本（`UNIXNU_PRELINK_KERNELCACHE_SHA256`、`UNIXNU_PRELINK_SLIDE`）；用该记录绑定存储驱动的板级配置因此需要设置 `kernelcache_sha256`，其他组合会使构建失败。
+
 重新生成记录，或用 `--check` 确认（不写文件，有差异时失败）：
 
 ```bash
@@ -116,7 +118,7 @@ python3 scripts/record-storage-interface.py --board ../UniXNU-<device>/board.tom
   --xnu out/<device>/tree/refer/xnu --iostoragefamily out/<device>/tree/refer/IOStorageFamily --check
 ```
 
-`--xnu` 和 `--iostoragefamily` 默认是脚本旁边的 `refer/xnu` 和 `refer/IOStorageFamily`，与构建树相同。脚本需要 `clang`，可在 macOS 和 Linux 上运行。在 Linux 上，没有 `/usr/bin/compression_tool` 时 `unixnu ipsw` 用 `lzfse` 命令解压 kernelcache。
+`--xnu` 和 `--iostoragefamily` 默认是脚本旁边的 `refer/xnu` 和 `refer/IOStorageFamily`，与构建树相同。脚本需要 `clang`，可在 macOS 和 Linux 上运行。
 
 ## 构建顺序
 
