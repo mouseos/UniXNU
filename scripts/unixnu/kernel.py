@@ -80,6 +80,13 @@ def build(ctx, modules):
     env.update(xnu_env(ctx))
     env.update(version_env(modules))
     env['JOBS'] = str(ctx.jobs)
+    # The kernelcache and slide this board prelinks against: the static storage interface record
+    # (scripts/data/native-storage-interface-audit.json) may only bind drivers for the same pair.
+    prelink_spec = ctx.board.get('kernel', {}).get('prelink') or {}
+    if prelink_spec.get('kernelcache_sha256'):
+        env['UNIXNU_PRELINK_KERNELCACHE_SHA256'] = prelink_spec['kernelcache_sha256']
+    if prelink_spec.get('slide') is not None:
+        env['UNIXNU_PRELINK_SLIDE'] = str(prelink_spec['slide'])
     record = ctx.tree / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/startup.o.json'
     if not record.is_file():
         # The archive builders and the boot progress layer read compile records of the XNU build, which only an earlier

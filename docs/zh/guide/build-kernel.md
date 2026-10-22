@@ -99,6 +99,25 @@ archives = [
 
 `build-native-aes-bindings.py` 和 `build-native-adreno-accelerator.py` 在原始硬件证据缺失时使用 `scripts/data/` 中记录的审计结果。记录的地址属于 `board.toml` 固定的 kernelcache。
 
+`build-native-virtio-bindings.py` 把 `NativeVirtioBlock`、`NativeRamBlock` 和 `NativeMsdc` 的窗口绑定到 IOStorageFamily 原始的 `IOBlockStorageDevice`。没有 `audit-storage-interface.py` 生成的 `build/storage-abi/interface-audit.json` 时，它使用 `scripts/data/native-storage-interface-audit.json`。该记录只包含地址和符号名。`scripts/record-storage-interface.py` 从公开输入生成它：
+
+- 190 个分派槽位的参考名称：用 `feeds.toml` 中的 xnu 头文件编译固定版本 IOStorageFamily 的 `IOBlockStorageDevice.cpp`（只检查目标文件，不链接）；
+- 固定 kernelcache 中的原始地址：内核槽位恰好指向这些名称的内核导出的唯一分派表、受保护构造函数、基类析构函数、抽象 D1/D0 析构函数的 `brk #1`、元类及其静态注册（`IOBlockStorageDevice`、父类 `IOService`、大小 `0x90` 和 `0x88`）；
+- 预链接地址：加上 `[kernel.prelink]` 的 slide。
+
+重新生成记录，或用 `--check` 确认（不写文件，有差异时失败）：
+
+```bash
+./unixnu fetch -D ../UniXNU-<device>
+./unixnu tree -D ../UniXNU-<device>
+./unixnu ipsw fetch KernelCache -D ../UniXNU-<device>
+python3 scripts/record-storage-interface.py --board ../UniXNU-<device>/board.toml \
+  --kernelcache out/ipsw/<build>/kernelcache.decompressed \
+  --xnu out/<device>/tree/refer/xnu --iostoragefamily out/<device>/tree/refer/IOStorageFamily --check
+```
+
+`--xnu` 和 `--iostoragefamily` 默认是脚本旁边的 `refer/xnu` 和 `refer/IOStorageFamily`，与构建树相同。脚本需要 `clang`，可在 macOS 和 Linux 上运行。在 Linux 上，没有 `/usr/bin/compression_tool` 时 `unixnu ipsw` 用 `lzfse` 命令解压 kernelcache。
+
 ## 构建顺序
 
 1. `unixnu fetch` 克隆 XNU、libpthread、corecrypto-2023 和 Apple 参考源码。
