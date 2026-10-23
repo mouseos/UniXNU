@@ -1,0 +1,145 @@
+name: a04br3 SSH incremental build
+
+# Development workflow of the a04br3 port (not part of the upstream pull requests): one full build as macos.yml does
+# with the a04br3 inputs, then the same runner stays reachable over SSH (upterm, the key below) for incremental
+# rebuilds: /tmp/a04br3-rebuild.sh <device ref> rebuilds the kernel and payload and publishes them as assets of the
+# release a04br3-ssh-<run id>. The connection command is the commit status a04br3/ssh. End with: touch /tmp/a04br3-done
+
+on:
+  workflow_dispatch:
+    inputs:
+      device_ref:
+        description: UniXNU-a04br3 ref
+        required: true
+        default: main
+      keep_minutes:
+        description: Minutes the runner stays after the first build (1 to 330)
+        required: true
+        default: "330"
+
+permissions:
+  contents: write
+  statuses: write
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: mouseos/UniXNU-a04br3
+          ref: ${{ inputs.device_ref }}
+          path: device
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install host tools
+        run: |
+          brew install cmake ninja unifdef llvm mtools dtc
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix unifdef)/bin" >> "$GITHUB_PATH"
+
+      - name: Start the SSH session
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl -fL https://github.com/owenthereal/upterm/releases/download/v0.38.0/upterm_darwin_arm64.tar.gz -o "$RUNNER_TEMP/upterm.tar.gz"
+          echo "8258498167a8e7671680699f765c4cdf6814fe957256ac3fc7452cbd5ad1366f  $RUNNER_TEMP/upterm.tar.gz" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/upterm-bin"
+          tar -xzf "$RUNNER_TEMP/upterm.tar.gz" -C "$RUNNER_TEMP/upterm-bin"
+          echo "$RUNNER_TEMP/upterm-bin" >> "$GITHUB_PATH"
+          echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINyHbBUx9HvSf7kVU7pfCNtFBAt4O7o30hpFrBEANRzP a04br3-debug' > "$RUNNER_TEMP/authorized_keys"
+          "$RUNNER_TEMP/upterm-bin/upterm" host --server wss://uptermd.upterm.dev --detach --accept --skip-host-key-check --name a04br3 \
+            --authorized-keys "$RUNNER_TEMP/authorized_keys" --force-command "bash --noprofile --norc -i" -o json -- sleep 21000 > "$RUNNER_TEMP/ssh-session.json"
+          python3 - <<'PYTHON'
+          import json, os, subprocess
+          command = json.load(open(os.environ['RUNNER_TEMP'] + '/ssh-session.json'))['sshCommand']
+          subprocess.run(['gh', 'api', '--method', 'POST', f"repos/{os.environ['GITHUB_REPOSITORY']}/statuses/{os.environ['GITHUB_SHA']}",
+                          '-f', 'state=pending', '-f', 'context=a04br3/ssh', '-f', f'description={command[:140]}'], check=True,
+                         stdout=subprocess.DEVNULL)
+          print(command)
+          PYTHON
+
+      - name: Environment and rebuild script for the SSH session
+        env:
+          UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          {
+            echo "export PATH='$PATH'"
+            echo "export UNIQUE_CHIP_ID='$UNIQUE_CHIP_ID'"
+            echo "export GH_TOKEN='$GH_TOKEN' GITHUB_TOKEN='$GH_TOKEN'"
+            echo "export GITHUB_WORKSPACE='$GITHUB_WORKSPACE' RUNNER_TEMP='$RUNNER_TEMP' GITHUB_REPOSITORY='$GITHUB_REPOSITORY'"
+            echo "export RELEASE=a04br3-ssh-${{ github.run_id }}"
+            echo "cd '$GITHUB_WORKSPACE'"
+          } > "$RUNNER_TEMP/a04br3.env"
+          cat > /tmp/a04br3-rebuild.sh <<'SCRIPT'
+          #!/bin/bash
+          # /tmp/a04br3-rebuild.sh <UniXNU-a04br3 ref>: incremental kernel and payload of that ref, published to $RELEASE.
+          set -euo pipefail
+          source "$RUNNER_TEMP/a04br3.env"
+          [ -f "$RUNNER_TEMP/a04br3-data.env" ] && source "$RUNNER_TEMP/a04br3-data.env"
+          git -C device fetch -q origin
+          git -C device checkout -q --detach "${1:-origin/main}"
+          ./unixnu tree -D "$GITHUB_WORKSPACE/device"
+          ./unixnu build kernel
+          ./unixnu build payload --trust-cache "$RUNNER_TEMP/trustcache" --data-ramdisk "$RUNNER_TEMP/data.dbr" --unique-chip-id "$UNIQUE_CHIP_ID"
+          tag="$(git -C device rev-parse --short HEAD)"
+          cp out/a04br3/payload/payload.img "$RUNNER_TEMP/payload-$tag.img"
+          gh release upload "$RELEASE" "$RUNNER_TEMP/payload-$tag.img" --clobber -R "$GITHUB_REPOSITORY"
+          echo "PUBLISHED payload-$tag.img"
+          SCRIPT
+          chmod +x /tmp/a04br3-rebuild.sh
+          gh release create "a04br3-ssh-${{ github.run_id }}" --title "a04br3 SSH build ${{ github.run_id }}" \
+            --notes "Payloads of the a04br3 SSH incremental build (development, not a release)." --prerelease --target "$GITHUB_SHA"
+
+      - name: First build
+        id: first
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
+          DEVICE_DIR: ${{ github.workspace }}/device
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ./unixnu defconfig a04br3_defconfig -D "$DEVICE_DIR"
+          ./unixnu fetch xnu libplatform libdispatch AvailabilityVersions libpthread corecrypto-2023 IOStorageFamily -D "$DEVICE_DIR"
+          bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"
+          echo "export XNU_OWNER_DATA_VOLUME_UUID=$(sed -n 's/^XNU_OWNER_DATA_VOLUME_UUID=//p' "$GITHUB_ENV" | tail -1)" > "$RUNNER_TEMP/a04br3-data.env"
+          source "$RUNNER_TEMP/a04br3-data.env"
+          ./unixnu build kernel
+          ./unixnu build payload --trust-cache "$RUNNER_TEMP/trustcache" --data-ramdisk "$RUNNER_TEMP/data.dbr" --unique-chip-id "$UNIQUE_CHIP_ID"
+          tag="$(git -C device rev-parse --short HEAD)"
+          cp out/a04br3/payload/payload.img "$RUNNER_TEMP/payload-$tag.img"
+          gh release upload "a04br3-ssh-${{ github.run_id }}" "$RUNNER_TEMP/payload-$tag.img" --clobber
+          echo "PUBLISHED payload-$tag.img"
+
+      - name: Keep the runner for SSH rebuilds
+        if: ${{ !cancelled() }}
+        env:
+          KEEP_MINUTES: ${{ inputs.keep_minutes }}
+        run: |
+          case "$KEEP_MINUTES" in ''|*[!0-9]*) exit 2;; esac
+          deadline=$((SECONDS + KEEP_MINUTES * 60))
+          while [ ! -f /tmp/a04br3-done ] && [ "$SECONDS" -lt "$deadline" ]; do sleep 60; done
+          "$RUNNER_TEMP/upterm-bin/upterm" session stop a04br3 || true
+
+      - name: Remove proprietary inputs
+        if: always()
+        run: |
+          rm -rf out/ipsw out/feeds device/.cache/firmware out/*/tree/.cache/firmware "$RUNNER_TEMP"/*.img
+          rm -f "$RUNNER_TEMP/trustcache" "$RUNNER_TEMP/data.dbr" "$RUNNER_TEMP/a04br3.env"
