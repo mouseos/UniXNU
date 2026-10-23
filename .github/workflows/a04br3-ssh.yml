@@ -12,6 +12,10 @@ on:
         description: UniXNU-a04br3 ref
         required: true
         default: main
+      skip_setup:
+        description: "Mark Setup done and skip the first-boot data migration in the Data seed (board skip_setup_tool, docs/guide/skip-setup.md), as macos.yml"
+        type: boolean
+        default: true
       keep_minutes:
         description: Minutes the runner stays after the first build (1 to 330)
         required: true
@@ -84,6 +88,7 @@ jobs:
             echo "export GH_TOKEN='$GH_TOKEN' GITHUB_TOKEN='$GH_TOKEN'"
             echo "export GITHUB_WORKSPACE='$GITHUB_WORKSPACE' RUNNER_TEMP='$RUNNER_TEMP' GITHUB_REPOSITORY='$GITHUB_REPOSITORY'"
             echo "export RELEASE=a04br3-ssh-${{ github.run_id }}"
+            if [ "${{ inputs.skip_setup }}" = "true" ]; then echo "export SKIP_SETUP_ARG=--skip-setup"; else echo "export SKIP_SETUP_ARG="; fi
             echo "cd '$GITHUB_WORKSPACE'"
           } > "$RUNNER_TEMP/a04br3.env"
           cat > /tmp/a04br3-rebuild.sh <<'SCRIPT'
@@ -96,7 +101,7 @@ jobs:
           git -C device checkout -q --detach "${1:-origin/main}"
           ./unixnu tree -D "$GITHUB_WORKSPACE/device"
           ./unixnu build kernel
-          ./unixnu build payload --trust-cache "$RUNNER_TEMP/trustcache" --data-ramdisk "$RUNNER_TEMP/data.dbr" --unique-chip-id "$UNIQUE_CHIP_ID"
+          ./unixnu build payload --trust-cache "$RUNNER_TEMP/trustcache" --data-ramdisk "$RUNNER_TEMP/data.dbr" --unique-chip-id "$UNIQUE_CHIP_ID" $SKIP_SETUP_ARG
           tag="$(git -C device rev-parse --short HEAD)"
           cp out/a04br3/payload/payload.img "$RUNNER_TEMP/payload-$tag.img"
           gh release upload "$RELEASE" "$RUNNER_TEMP/payload-$tag.img" --clobber -R "$GITHUB_REPOSITORY"
@@ -116,13 +121,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          source "$RUNNER_TEMP/a04br3.env"
           ./unixnu defconfig a04br3_defconfig -D "$DEVICE_DIR"
           ./unixnu fetch xnu libplatform libdispatch AvailabilityVersions libpthread corecrypto-2023 IOStorageFamily -D "$DEVICE_DIR"
           bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"
           echo "export XNU_OWNER_DATA_VOLUME_UUID=$(sed -n 's/^XNU_OWNER_DATA_VOLUME_UUID=//p' "$GITHUB_ENV" | tail -1)" > "$RUNNER_TEMP/a04br3-data.env"
           source "$RUNNER_TEMP/a04br3-data.env"
           ./unixnu build kernel
-          ./unixnu build payload --trust-cache "$RUNNER_TEMP/trustcache" --data-ramdisk "$RUNNER_TEMP/data.dbr" --unique-chip-id "$UNIQUE_CHIP_ID"
+          ./unixnu build payload --trust-cache "$RUNNER_TEMP/trustcache" --data-ramdisk "$RUNNER_TEMP/data.dbr" --unique-chip-id "$UNIQUE_CHIP_ID" $SKIP_SETUP_ARG
           tag="$(git -C device rev-parse --short HEAD)"
           cp out/a04br3/payload/payload.img "$RUNNER_TEMP/payload-$tag.img"
           gh release upload "a04br3-ssh-${{ github.run_id }}" "$RUNNER_TEMP/payload-$tag.img" --clobber
