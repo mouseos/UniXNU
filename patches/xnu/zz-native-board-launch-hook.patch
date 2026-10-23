@@ -1,0 +1,30 @@
+From: yuma shimizu <46545607+mouseos@users.noreply.github.com>
+Subject: [PATCH] zz-native-board-launch-hook: optional board hook before launchd
+
+With XNU_BOARD_LAUNCH=1 (CONFIG_XNU_BOARD_LAUNCH=y) load_init_program calls unixnu_board_launch(p, scratch), which
+a device repository supplies in its board archive (XNU_EXTRA_LD_ARCHIVES), after the root, SystemOS and Data mounts
+and before launchd is executed. The scratch page is the user page load_init_program already maps for init's
+arguments. A nonzero result stops the boot. Boards without the flag build the unchanged function.
+Named zz- so that it applies after the owner mount patches it follows and before the late zzy/zzz patches.
+
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7410,6 +7410,18 @@
+ 	(void) memorystatus_init_at_boot_snapshot();
+ #endif /* CONFIG_MEMORYSTATUS */
+ 
++#if defined(XNU_BOARD_LAUNCH) && XNU_BOARD_LAUNCH
++	/*
++	 * Board hook: a device repository links an archive (XNU_EXTRA_LD_ARCHIVES) that defines unixnu_board_launch().
++	 * It runs once, as init (pid 1) before launchd, with the root and the owner volumes mounted.
++	 */
++	{
++		extern int unixnu_board_launch(void *process, uint64_t scratch);
++		int board_error = unixnu_board_launch(p, (uint64_t)scratch_addr);
++		if (board_error) panic("board launch hook failed: %d", board_error);
++	}
++#endif
++
+ #if (DEBUG || DEVELOPMENT) && defined(XNU_NATIVE_AIR_INIT) && XNU_NATIVE_AIR_INIT
+ 	int offline_air = 0;
+ 	if (PE_parse_boot_argn("offline-air-init", &offline_air, sizeof(offline_air)) && offline_air) {

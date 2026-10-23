@@ -26,6 +26,7 @@
 | `native-arm-pan` | 设置 `XNU_NATIVE_PAN` 时启用 ARMv8.1 PAN |
 | `native-ns16550-serial` | 设置 `XNU_NS16550_UART=1` 时为 pe_serial 添加轮询 16550 控制台 |
 | `native-board-init-hook` | 设置 `XNU_BOARD_INIT=1` 时在 `bsd_init` 早期调用 `unixnu_board_init()` |
+| `zz-native-board-launch-hook` | 设置 `XNU_BOARD_LAUNCH=1` 时在 `load_init_program` 中、launchd 之前调用 `unixnu_board_launch()` |
 | `native-dt-panic-region` | 从设备树读取并校验 panic 日志区域 |
 
 ## 4 KiB 页

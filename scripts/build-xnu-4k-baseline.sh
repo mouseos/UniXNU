@@ -552,6 +552,12 @@ if [ "$BOARD_INIT" != 0 ] && [ "$BOARD_INIT" != 1 ]; then
   exit 1
 fi
 if [ "$BOARD_INIT" = 1 ]; then EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOARD_INIT=1"; fi
+BOARD_LAUNCH=${XNU_BOARD_LAUNCH:-0}
+if [ "$BOARD_LAUNCH" != 0 ] && [ "$BOARD_LAUNCH" != 1 ]; then
+  echo 'XNU_BOARD_LAUNCH must be 0 or 1' >&2
+  exit 1
+fi
+if [ "$BOARD_LAUNCH" = 1 ]; then EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOARD_LAUNCH=1"; fi
 if [ "$NATIVE_PAN" = 1 ]; then
   EXTRA_MAKE_ARGS+=("copyio.o_CFLAGS_ADD=-march=armv8.1-a")
   EXTRA_MAKE_ARGS+=("pcb.o_CFLAGS_ADD=-march=armv8.1-a")

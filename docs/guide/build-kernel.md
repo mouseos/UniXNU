@@ -75,6 +75,7 @@ Each `CONFIG_XNU_<NAME>` line becomes `XNU_<NAME>` in the kernel build environme
 | `XNU_NATIVE_PAN` | Enables ARMv8.1 PAN support | none |
 | `XNU_NS16550_UART` | Polled 16550 serial console from the ADT `uart0` with `ns16550a` (`reg-shift`, `reg-io-width`) | none |
 | `XNU_BOARD_INIT` | Calls the board hook `unixnu_board_init()` from `bsd_init`; the board links it with `XNU_EXTRA_LD_ARCHIVES` | the board archive |
+| `XNU_BOARD_LAUNCH` | Calls the board hook `unixnu_board_launch(p, scratch)` from `load_init_program`, before launchd; the board links it with `XNU_EXTRA_LD_ARCHIVES` | the board archive |
 | `XNU_DT_PANIC_REGION` | Reads the panic region from the device tree | none |
 | `XNU_TRUST_CACHE_RUNTIME` | Initializes the trust cache runtime | none |
 | `XNU_BOOT_PROGRESS` | Adds the boot progress layer | `build/boot-progress/libBootProgress.a` |

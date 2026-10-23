@@ -26,6 +26,7 @@ Patches apply in name order from `patches/xnu/*.patch` and `kits/NativePrelink/p
 | `native-arm-pan` | Enables ARMv8.1 PAN when `XNU_NATIVE_PAN` is set |
 | `native-ns16550-serial` | Adds a polled 16550 console to pe_serial when `XNU_NS16550_UART=1` |
 | `native-board-init-hook` | Calls `unixnu_board_init()` early in `bsd_init` when `XNU_BOARD_INIT=1` |
+| `zz-native-board-launch-hook` | Calls `unixnu_board_launch()` in `load_init_program`, before launchd, when `XNU_BOARD_LAUNCH=1` |
 | `native-dt-panic-region` | Reads the panic log region from the device tree and validates it |
 
 ## Four-kilobyte pages
