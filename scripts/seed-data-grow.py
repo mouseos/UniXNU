@@ -109,7 +109,8 @@ def main():
             listing = plistlib.loads(subprocess.check_output(['diskutil', 'apfs', 'list', '-plist']))
             container = None
             for entry in listing['Containers']:
-                if any(s['DeviceIdentifier'] == store for s in entry.get('PhysicalStores', [])):
+                # A raw image without a partition map can still appear as a single slice (diskNs1) on newer macOS.
+                if any(s['DeviceIdentifier'] in (store, store + 's1') for s in entry.get('PhysicalStores', [])):
                     container = entry['ContainerReference']
             if not container:
                 sys.exit('No APFS container found on the attached seed')
