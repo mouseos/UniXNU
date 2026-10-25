@@ -124,7 +124,7 @@ for(flag=0;flag<4;flag++)for(present=0;present<2;present++)for(phase=0;phase<=12
  assert(!allocations);int active=0;
 #if XNU_ROOT_TIMING
  active=present&&flag==1;
- if(active){struct native_sig_slot*s=&native_sig_slots[0];assert(s->uniqueid==102&&s->blob_count==1&&s->init_count==1&&s->blob_errors==(uint64_t)(error!=0));assert(s->mac_count==(uint64_t)mac_calls);assert(s->init_ns==10);assert(s->mac_ns==10*(uint64_t)mac_calls);assert(s->init_ns+s->pre_ns+s->mac_ns+s->post_ns==ticks-10);assert(vid_reads==1);native_root_signature_timing_report();assert(summary_logs==5&&strstr(output,"bc=1"));}
+ if(active){struct native_sig_slot*s=&native_sig_slots[0];assert(s->uniqueid==102&&s->blob_count==1&&s->init_count==1&&s->blob_errors==(uint64_t)(error!=0));assert(s->mac_count==(uint64_t)mac_calls);assert(s->init_ns==10);assert(s->mac_ns==10*(uint64_t)mac_calls);assert(s->init_ns+s->pre_ns+s->mac_ns+s->post_ns==ticks-10);assert(vid_reads==1);native_root_signature_timing_report();assert(summary_logs==6&&strstr(output,"bc=1"));}
 #endif
  if(!active)assert(!clocks&&!vid_reads);
 }
@@ -151,9 +151,13 @@ assert(native_sig_slots[0].init_ns==1001&&native_sig_slots[1].post_ns==4004);
 assert(native_sig_slots[0].vnode_cross+native_sig_slots[0].vnode_dropped==1000);
 assert(native_sig_slots[1].vnode_cross+native_sig_slots[1].vnode_dropped==1001);
 assert(!summary_logs&&!original_logs);
+/* Actual per-process hash-stage collector accumulates once per completed call. */
+reset();uint64_t sample[5]={10,20,30,4,16384};native_root_hash_timing_record(2,102,sample,1);native_root_hash_timing_record(2,102,sample,0);
+assert(native_sig_slots[0].hash_read_count==8&&native_sig_slots[0].hash_read_bytes==32768&&native_sig_slots[0].hash_read_ns==20&&native_sig_slots[0].hash_original_ns==40&&native_sig_slots[0].hash_derived_ns==60&&native_sig_slots[0].hash_batched==1);
+native_root_hash_timing_record(2,202,sample,1);assert(native_sig_slots[1].hash_read_count==4&&native_sig_slots[0].hash_read_count==8);
 /* Metadata is copied: destroying the vnode does not cause a later dereference. */
 reset();flag=1;present=1;phase=0;struct ubc_info info={0};struct vnode*v=malloc(sizeof(*v));*v=(struct vnode){9,&info};vm_address_t addr=0;struct cs_blob*out=NULL;
-assert(!ubc_cs_blob_add(v,0,CPU_TYPE_ANY,0,0,&addr,4096,NULL,0,&out));zfree_ro(0,out);free(v);native_root_signature_timing_report();assert(summary_logs==5);
+assert(!ubc_cs_blob_add(v,0,CPU_TYPE_ANY,0,0,&addr,4096,NULL,0,&out));zfree_ro(0,out);free(v);native_root_signature_timing_report();assert(summary_logs==6);
 #endif
 puts("PASS shipped blob-add: strict compile/runtime gates, disjoint phases, MACF on/off, errors/cleanup/EAGAIN, vid+offset identity, bounded metadata/drop, concurrent counters and freed-vnode summary");}
 '''

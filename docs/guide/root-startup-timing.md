@@ -69,7 +69,7 @@ The same compile/runtime gates also collect `F_ADDFILESIGS`,
 There is no signature-path UART output. At the first two gated shared-region
 begins, tagged `RST` records emit cumulative counters for at most the first
 four distinct processes, keyed by `proc_uniqueid(p)` (at most eight logical
-summaries, five records each, hence 40 lines per boot). Output includes both
+summaries, six records each, hence 48 lines per boot). Output includes both
 `p` (PID) and the full 64-bit `u` (unique ID); PID reuse
 therefore cannot merge different processes. Zero unique IDs are excluded.
 
@@ -184,7 +184,7 @@ A nonblocking try-lock protects only this bounded table, after original cleanup.
 Contention or table exhaustion increments `vnode_dropped`; phase totals still
 accumulate. Consequently duplicate counts are conservative samples. Relaxed
 concurrent summaries can observe partial counter updates or a mixed last-metadata
-snapshot. The compact transport uses at most 40 newline-terminated records as
+snapshot. The compact transport uses at most 48 newline-terminated records as
 described below; it does not log on the signature/blob-add path.
 
 ```sh
@@ -203,7 +203,7 @@ updates, and summary output after the original vnode has been freed.
 The XNU console print buffer retains only 255 bytes per printf unless synchronous
 drain is enabled; a longer line also loses its newline. The original extended
 summary hit exactly this limit in raw UART, so adjacent prefixes were concatenated.
-The console-safe format uses five tagged printf calls per logical summary. Each
+The console-safe format uses six tagged printf calls per logical summary. Each
 record is at most 200 bytes including its newline even with maximum-width numeric
 values, and each fits a single normal console ring reservation (256-byte chunk).
 No diagnostic spin/try-lock is held while printing. A report's records may be
@@ -217,6 +217,7 @@ unchanged; the observed root-end records were 233/237 bytes and were not truncat
 | `RST sig` | `c` count, `b` bytes, `w` whole_ns, `e` errors, `rc` read_count, `rn` read_ns |
 | `RST add` | `rb` read_requested_bytes, `ac` add_count, `ab` add_bytes, `an` add_ns, `bc` blob_count, `be` blob_errors |
 | `RST phase` | `ic` init_count, `in` init_ns, `pre` pre_ns, `mc` mac_count, `mn` mac_ns, `post` post_ns |
+| `RST hash` | `rc` preparation read calls, `rb` requested read bytes, `rn` read ns, `on` original-hash ns, `dn` derived-hash ns, `bat` selected-batch calls |
 | `RST prep` | `pc` prepare calls, `pb` effective requested code-limit bytes, `pn` prepare ns, `pe` prepare errors, `hit` completed-cache reuse |
 | `RST vnode` | `cross` vnode_cross, `drop` vnode_dropped, `a` duplicate_vnode (hex), `v` duplicate_vid, `o` duplicate_base (hex), `peer` duplicate_peer |
 
@@ -229,7 +230,7 @@ functions. It reproduces the original 255-byte truncation/newline loss, then
 verifies all shipped records against libc formatting at maximum counter widths,
 including the vararg types, and checks one complete <=200-byte console write per
 record. Concurrent reporters produce exactly one of each tag for each q/process
-pair, bounded to 40 records. It runs under ASan/UBSan with printf format checking.
+pair, bounded to 48 records. It runs under ASan/UBSan with printf format checking.
 
 
 ### Opt-in native4k registration coalescing
@@ -269,8 +270,8 @@ measures that call alone, excluding gate wait and the telemetry collector. `pb`
 sums the effective requested signing limit for 16KiB signatures, using nonzero
 `codeLimit64` when its version permits it, otherwise `codeLimit`. It is requested
 bytes, not completed I/O/verified bytes: rejected/failed preparation may read less
-or nothing. `hit` counts early reuse of completed native4k arrays. All five short
-records remain <=200 bytes and the total report budget is now 40 records per boot.
+or nothing. `hit` counts early reuse of completed native4k arrays. All six short
+records remain <=200 bytes and the total report budget is now 48 records per boot.
 
 ```sh
 python scripts/tests/check_root_coalesce.py --xnu-source /path/to/pinned/xnu
@@ -287,3 +288,50 @@ actual gate functions to arm64 Mach-O against the real pinned XNU headers (no AP
 mocks), including static LCK declarations, their mid-translation-unit include
 position, msleep/wakeup and vnode APIs. This is not a complete SDK kernel/PAC
 build/link or runtime performance proof; those remain owner validation.
+
+
+### Opt-in 256KiB native4k preparation reads
+
+`native-cs-read-batch=1` selects a fixed 256KiB scratch read buffer in
+`cs_native4k_prepare`, only for a read-only vnode mount and with the existing
+native4k hash-cache support compiled. The default/absent/non-one flag and writable
+mounts retain 16KiB scratch reads. The independent canonical patch is
+`zzx-native4k-read-batch.patch`, ordered after root timing and before registration
+coalescing. No board flags, SDK setup, VM fault paths or original hash policy are
+changed. The tracked patchset refresher handles the changed source incrementally.
+
+Each original 16KiB block is still authenticated separately with its signed
+expected hash. Only after that block passes are its 4KiB digests derived from the
+same scratch buffer. Every tail is bounded by its actual read/original block
+length, never uninitialized scratch padding. All original blocks must pass and
+`vm_map_protect(..., VM_PROT_READ, TRUE)` must succeed before the array is published.
+Read errors, residual bytes, missing/bad hashes, allocation errors and RO-protect
+failure free private storage without publishing. Signed offset and last-byte
+span overflow are rejected before issuing the affected read.
+
+The independent root-timing compile/runtime gates add `RST hash` to the existing
+bounded summaries: `rc`/`rb` count requested vn_rdwr calls/bytes including failed
+requests; `rn` times vn_rdwr only; `on` times original-hash init/update/final only;
+`dn` times each derived-hash init/update/final only, excluding digest memcpy.
+These are disjoint wall intervals, not exclusive CPU time. They exclude allocation,
+lookup/compare/copy, protection and final telemetry aggregation. `bat` counts helper
+calls which selected the 256KiB buffer; early rejects or storage-allocation failures
+before that selection have no batched sample. Metrics from failed calls still
+accumulate. No per-read or per-hash UART is emitted. There are six <=200-byte
+records per logical summary, at most 48 records per boot.
+
+```sh
+python scripts/tests/check_root_read_batch.py --xnu-source /path/to/pinned/xnu
+```
+
+This runs the actual ordered-patched helper with real OpenSSL SHA-256 under
+ASan/UBSan, with timing compiled both off and on. It checks strict batch/root flags,
+read-only scope, 4KiB/16KiB/256KiB boundaries and multi-batch tails, truncated-digest
+strides, original-buffer derivation after backing bytes change, corruption of each
+original block, failed/short first/middle/last reads, null hashes, allocation and
+protection failures, signed offset overflow, compatibility rejections and no
+publication on any failure. The existing collector and actual-XNU-console fixtures
+also cover accumulated stage counters and the widened 48-record output budget.
+
+This is an experimental throughput comparison. No boot-time reduction or real
+hardware performance improvement is claimed until measured with a matching payload.
