@@ -69,7 +69,7 @@ The same compile/runtime gates also collect `F_ADDFILESIGS`,
 There is no signature-path UART output. At the first two gated shared-region
 begins, tagged `RST` records emit cumulative counters for at most the first
 four distinct processes, keyed by `proc_uniqueid(p)` (at most eight logical
-summaries, four records each, hence 32 lines per boot). Output includes both
+summaries, five records each, hence 40 lines per boot). Output includes both
 `p` (PID) and the full 64-bit `u` (unique ID); PID reuse
 therefore cannot merge different processes. Zero unique IDs are excluded.
 
@@ -184,7 +184,7 @@ A nonblocking try-lock protects only this bounded table, after original cleanup.
 Contention or table exhaustion increments `vnode_dropped`; phase totals still
 accumulate. Consequently duplicate counts are conservative samples. Relaxed
 concurrent summaries can observe partial counter updates or a mixed last-metadata
-snapshot. The compact transport uses at most 32 newline-terminated records as
+snapshot. The compact transport uses at most 40 newline-terminated records as
 described below; it does not log on the signature/blob-add path.
 
 ```sh
@@ -203,7 +203,7 @@ updates, and summary output after the original vnode has been freed.
 The XNU console print buffer retains only 255 bytes per printf unless synchronous
 drain is enabled; a longer line also loses its newline. The original extended
 summary hit exactly this limit in raw UART, so adjacent prefixes were concatenated.
-The console-safe format uses four tagged printf calls per logical summary. Each
+The console-safe format uses five tagged printf calls per logical summary. Each
 record is at most 200 bytes including its newline even with maximum-width numeric
 values, and each fits a single normal console ring reservation (256-byte chunk).
 No diagnostic spin/try-lock is held while printing. A report's records may be
@@ -217,6 +217,7 @@ unchanged; the observed root-end records were 233/237 bytes and were not truncat
 | `RST sig` | `c` count, `b` bytes, `w` whole_ns, `e` errors, `rc` read_count, `rn` read_ns |
 | `RST add` | `rb` read_requested_bytes, `ac` add_count, `ab` add_bytes, `an` add_ns, `bc` blob_count, `be` blob_errors |
 | `RST phase` | `ic` init_count, `in` init_ns, `pre` pre_ns, `mc` mac_count, `mn` mac_ns, `post` post_ns |
+| `RST prep` | `pc` prepare calls, `pb` effective requested code-limit bytes, `pn` prepare ns, `pe` prepare errors, `hit` completed-cache reuse |
 | `RST vnode` | `cross` vnode_cross, `drop` vnode_dropped, `a` duplicate_vnode (hex), `v` duplicate_vid, `o` duplicate_base (hex), `peer` duplicate_peer |
 
 ```sh
@@ -228,4 +229,61 @@ functions. It reproduces the original 255-byte truncation/newline loss, then
 verifies all shipped records against libc formatting at maximum counter widths,
 including the vararg types, and checks one complete <=200-byte console write per
 record. Concurrent reporters produce exactly one of each tag for each q/process
-pair, bounded to 32 records. It runs under ASan/UBSan with printf format checking.
+pair, bounded to 40 records. It runs under ASan/UBSan with printf format checking.
+
+
+### Opt-in native4k registration coalescing
+
+`native-cs-coalesce=1` enables registration coalescing only when the existing
+`XNU_NATIVE_CS_HASH_CACHE=1` support is compiled, the native page shift is 12,
+the signature hash shift is 14, and `vnode_vfsisrdonly` reports a read-only mount.
+Absent/non-one flags and writable vnodes retain the original preparation path.
+No board defaults or signature checks are disabled. The canonical functional
+change is `zzy-native4k-coalesce.patch`, applied after the timing and native4k
+patches. There is no on-demand vnode I/O in VM page validation.
+
+Each call still performs its own structure/CodeDirectory/MACF/auxiliary validation.
+After that, a 64-entry active registry coalesces producers by vnode plus vid.
+Waiters sleep outside vnode/VM locks. The registry mutex is held only for table
+lookup/claim/release, never through validation, I/O, or publication. A full table
+falls back to the original path. No failed or partially prepared cache is stored
+in the registry, and entries are cleared/woken on every post-acquisition exit.
+The caller's existing vnode reference spans the whole call; no reference remains
+in the registry after release.
+
+After waiting, the code rechecks the read-only mount/vid and calls the shared
+original duplicate matcher under vnode_lock. Reuse requires the original range,
+size, flags, signer/platform/team, CPU compatibility and CD hash conditions, plus
+an already-published native4k hash array. It preserves the original CPU update,
+generation refresh, temporary cleanup and EAGAIN-to-success normalization.
+Mismatches or missing arrays do not short-circuit preparation; the original final
+matcher still runs after preparation, preserving its error precedence. Stack PAC
+sign/auth covers the newly blocking wait/lookup, and the original publication
+PAC flow remains. A successful producer still verifies all original 16KiB blocks,
+derives 4KiB hashes from the same verified bytes and publishes only the completed
+read-only array.
+
+The existing root-timing compile/runtime gate separately enables `RST prep`.
+`pc` counts actual `cs_native4k_prepare` calls, including no-op/error calls; `pn`
+measures that call alone, excluding gate wait and the telemetry collector. `pb`
+sums the effective requested signing limit for 16KiB signatures, using nonzero
+`codeLimit64` when its version permits it, otherwise `codeLimit`. It is requested
+bytes, not completed I/O/verified bytes: rejected/failed preparation may read less
+or nothing. `hit` counts early reuse of completed native4k arrays. All five short
+records remain <=200 bytes and the total report budget is now 40 records per boot.
+
+```sh
+python scripts/tests/check_root_coalesce.py --xnu-source /path/to/pinned/xnu
+python scripts/tests/check_root_coalesce_headers.py --xnu-source /path/to/pinned/xnu
+```
+
+The first fixture executes the actual gate, matcher and blob-add function under
+ASan/UBSan in three cache/timing configurations. Four callers include real blocked
+waiters and prepare once; a failed producer wakes a waiter which retries. It also
+checks separate-vnode parallelism, strict flags, writable exclusion, original
+mismatch/error precedence, CPU/generation updates, missing-cache fallback, bounded
+registry fallback and effective codeLimit64 telemetry. The second compiles the
+actual gate functions to arm64 Mach-O against the real pinned XNU headers (no API
+mocks), including static LCK declarations, their mid-translation-unit include
+position, msleep/wakeup and vnode APIs. This is not a complete SDK kernel/PAC
+build/link or runtime performance proof; those remain owner validation.

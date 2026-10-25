@@ -14,7 +14,8 @@ f='bsd/kern/kern_descrip.c'
 with tempfile.TemporaryDirectory(prefix='signature-timing-') as d:
  t=Path(d);src=t/f;src.parent.mkdir(parents=True)
  src.write_bytes(subprocess.check_output(['git','-C',str(feed),'show',rev+':'+f]))
- subprocess.run(['git','apply','--include='+f,str(R/'patches/xnu/zz-root-startup-timing.patch')],cwd=t,check=True)
+ for patch in [*sorted((R/'patches/xnu').glob('*.patch')),*sorted((R/'kits/NativePrelink/patches').glob('*.patch'))]:
+  subprocess.run(['git','apply','--include='+f,str(patch)],cwd=t,check=True)
  s=src.read_text();helpers=s[s.index('/* Optional signature-case'):s.index('int\nsys_fcntl_nocancel(')]
  helpers=helpers.replace('#include <kern/clock.h>','').replace('#include <pexpert/pexpert.h>','')
  case=s[s.index('\tcase F_ADDSIGS:',s.index('int\nsys_fcntl_nocancel(')):s.index('#if CONFIG_SUPPLEMENTAL_SIGNATURES',s.index('\tcase F_ADDSIGS:',s.index('int\nsys_fcntl_nocancel(')))]
@@ -102,7 +103,7 @@ assert(e==expected);int active=0;
 #if XNU_ROOT_TIMING
 active=present&&flag==1&&cmd!=F_ADDSIGS;
 if(active){struct native_sig_slot*s=&native_sig_slots[0];assert(s->pid==2&&s->uniqueid==102&&s->count==1&&s->errors==(uint64_t)(e!=0));assert(s->read_count==(uint64_t)reads&&s->add_count==(uint64_t)adds);assert(s->read_ns==10*(uint64_t)reads&&s->add_ns==10*(uint64_t)adds);assert(s->read_bytes==4096*(uint64_t)reads&&s->add_bytes==4096*(uint64_t)adds);assert(s->whole_ns==10+20*(uint64_t)(reads+adds));
-for(int i=0;i<10;i++){native_root_signature_timing_report();}assert(logs==8);
+for(int i=0;i<10;i++){native_root_signature_timing_report();}assert(logs==10);
 }
 #endif
 if(!active)assert(!clocks);
@@ -110,7 +111,7 @@ if(!active)assert(!clocks);
 #if XNU_ROOT_TIMING
 memset(native_sig_slots,0,sizeof(native_sig_slots));native_sig_reports=0;flag=1;present=1;phase=0;cached=0;padding=0;
 for(int pid=1;pid<=5;pid++){p.pid=pid;p.uniqueid=100+pid;assert(!run(&p,F_ADDFILESIGS,0));}
-logs=0;output[0]=0;for(int i=0;i<10;i++){native_root_signature_timing_report();}assert(logs==32);
+logs=0;output[0]=0;for(int i=0;i<10;i++){native_root_signature_timing_report();}assert(logs==40);
 /* PID reuse must occupy a separate process slot; same identity aggregates. */
 memset(native_sig_slots,0,sizeof(native_sig_slots));native_sig_reports=0;
 p.pid=2;p.uniqueid=0x100000001ULL;assert(!run(&p,F_ADDFILESIGS,0));assert(!run(&p,F_ADDFILESIGS,0));
@@ -120,7 +121,7 @@ assert(native_sig_slots[0].uniqueid==0x100000001ULL&&native_sig_slots[0].count==
 assert(native_sig_slots[1].uniqueid==0x200000001ULL&&native_sig_slots[1].count==1&&native_sig_slots[1].errors==1);
 assert(native_sig_slots[0].read_count==2&&native_sig_slots[0].add_count==2);
 assert(native_sig_slots[1].read_count==1&&native_sig_slots[1].add_count==0);
-logs=0;output[0]=0;native_root_signature_timing_report();assert(logs==8);
+logs=0;output[0]=0;native_root_signature_timing_report();assert(logs==10);
 assert(strstr(output,"p=2 u=4294967297 c=2")&&strstr(output,"p=2 u=8589934593 c=1"));
 /* Zero identity is reserved for an empty slot, and cannot start a clock. */
 p.uniqueid=0;clocks=0;phase=0;assert(!run(&p,F_ADDFILESIGS,0));assert(!clocks);

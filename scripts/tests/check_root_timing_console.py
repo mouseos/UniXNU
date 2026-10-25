@@ -51,7 +51,7 @@ static unsigned serialmode;
 #define SERIALMODE_SYNCDRAIN 1
 static _Thread_local char expected[4096];
 static pthread_mutex_t wire_lock=PTHREAD_MUTEX_INITIALIZER;
-static unsigned writes,seen[2][4][4],reproduce;
+static unsigned writes,seen[2][4][5],reproduce;
 static void console_write(const char*text,int size){
  pthread_mutex_lock(&wire_lock);
  if(reproduce){assert(size==255&&!memchr(text,'\n',size));writes++;pthread_mutex_unlock(&wire_lock);return;}
@@ -60,8 +60,8 @@ static void console_write(const char*text,int size){
  unsigned q=0;int pid;unsigned long long uid;char tag[20];
  assert(sscanf(text,"RST %19s q=%u p=%d u=%llu",tag,&q,&pid,&uid)==4);
  assert(q>=1&&q<=2&&pid==INT_MAX&&uid>=UINT64_MAX-3);
- unsigned kind=!strcmp(tag,"sig")?0:!strcmp(tag,"add")?1:!strcmp(tag,"phase")?2:!strcmp(tag,"vnode")?3:99;
- assert(kind<4);assert(!seen[q-1][UINT64_MAX-uid][kind]++);writes++;
+ unsigned kind=!strcmp(tag,"sig")?0:!strcmp(tag,"add")?1:!strcmp(tag,"phase")?2:!strcmp(tag,"vnode")?3:!strcmp(tag,"prep")?4:99;
+ assert(kind<5);assert(!seen[q-1][UINT64_MAX-uid][kind]++);writes++;
  pthread_mutex_unlock(&wire_lock);
 }
 struct proc{int pid;uint64_t uid;};typedef struct proc*proc_t;
@@ -93,9 +93,9 @@ int main(void){
  memset(native_sig_slots,0xff,sizeof(native_sig_slots));
  for(int i=0;i<4;i++){native_sig_slots[i].pid=INT_MAX;native_sig_slots[i].uniqueid=UINT64_MAX-i;}
  pthread_t a,b;pthread_create(&a,NULL,report,NULL);pthread_create(&b,NULL,report,NULL);pthread_join(a,NULL);pthread_join(b,NULL);
- for(int i=0;i<10;i++)native_root_signature_timing_report();assert(writes==32);
- for(int q=0;q<2;q++)for(int uid=0;uid<4;uid++)for(int kind=0;kind<4;kind++)assert(seen[q][uid][kind]==1);
- puts("PASS actual XNU formatter/console: reproduces 255-byte newline loss; all four full-width records <=200, exact libc vararg parity, concurrent report IDs, each record one complete console write, bounded 32 records");
+ for(int i=0;i<10;i++)native_root_signature_timing_report();assert(writes==40);
+ for(int q=0;q<2;q++)for(int uid=0;uid<4;uid++)for(int kind=0;kind<5;kind++)assert(seen[q][uid][kind]==1);
+ puts("PASS actual XNU formatter/console: reproduces 255-byte newline loss; all five full-width records <=200, exact libc vararg parity, concurrent report IDs, each record one complete console write, bounded 40 records");
 }
 '''
  c=pre+size+'\n'+console_struct+'\n'+actual_formatter+actual_console+decl+collector+'\n#undef printf\n'+bridge+main

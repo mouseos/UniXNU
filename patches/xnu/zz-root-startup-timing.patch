@@ -100,7 +100,7 @@ diff --git a/bsd/vm/vm_unix.c b/bsd/vm/vm_unix.c
 diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
 --- a/bsd/kern/kern_descrip.c
 +++ b/bsd/kern/kern_descrip.c
-@@ -2740,9 +2740,171 @@
+@@ -2740,9 +2740,187 @@
  	return sys_fcntl_outdrop(p, fd, fp, vp, error);
  }
  
@@ -113,7 +113,8 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
 +struct native_sig_slot { int pid; uint64_t uniqueid, count, bytes, whole_ns, errors;
 +    uint64_t read_count, read_bytes, read_ns, add_count, add_bytes, add_ns;
 +    uint64_t blob_count, blob_errors, init_count, init_ns, pre_ns, mac_count, mac_ns, post_ns;
-+    uint64_t vnode_cross, vnode_dropped, duplicate_vnode, duplicate_vid, duplicate_base, duplicate_peer; };
++    uint64_t vnode_cross, vnode_dropped, duplicate_vnode, duplicate_vid, duplicate_base, duplicate_peer;
++    uint64_t prep_count, prep_bytes, prep_ns, prep_errors, prep_reuse; };
 +static struct native_sig_slot native_sig_slots[4];
 +static unsigned native_sig_reports;
 +struct native_sig_timing { struct native_sig_slot *slot; uint64_t begin, bytes;
@@ -195,6 +196,18 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
 +	__atomic_store_n(&native_sig_vnodes_busy, 0, __ATOMIC_RELEASE);
 +#undef BLOB_ACC
 +}
++void native_root_prepare_timing_record(int, uint64_t, uint64_t, uint64_t, int, int);
++void
++native_root_prepare_timing_record(int pid, uint64_t uid, uint64_t bytes, uint64_t ns, int error, int reused)
++{
++	struct native_sig_slot *s = native_sig_slot_get(pid, uid);
++	if (!s) return;
++	if (reused) { __atomic_fetch_add(&s->prep_reuse, 1, __ATOMIC_RELAXED); return; }
++	__atomic_fetch_add(&s->prep_count, 1, __ATOMIC_RELAXED);
++	__atomic_fetch_add(&s->prep_bytes, bytes, __ATOMIC_RELAXED);
++	__atomic_fetch_add(&s->prep_ns, ns, __ATOMIC_RELAXED);
++	__atomic_fetch_add(&s->prep_errors, error != 0, __ATOMIC_RELAXED);
++}
 +static uint64_t
 +native_sig_stage_begin(const struct native_sig_timing *t)
 +{
@@ -251,6 +264,9 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
 +		printf("RST vnode q=%u p=%d u=%llu cross=%llu drop=%llu a=%llx v=%llu o=%llx peer=%llu\n",
 +		    n + 1, pid, SIG_GET(uniqueid), SIG_GET(vnode_cross), SIG_GET(vnode_dropped),
 +		    SIG_GET(duplicate_vnode), SIG_GET(duplicate_vid), SIG_GET(duplicate_base), SIG_GET(duplicate_peer));
++		printf("RST prep q=%u p=%d u=%llu pc=%llu pb=%llu pn=%llu pe=%llu hit=%llu\n",
++		    n + 1, pid, SIG_GET(uniqueid), SIG_GET(prep_count), SIG_GET(prep_bytes),
++		    SIG_GET(prep_ns), SIG_GET(prep_errors), SIG_GET(prep_reuse));
 +#undef SIG_GET
 +	}
 +}
@@ -272,7 +288,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  	int fd = uap->fd;
  	int cmd = uap->cmd;
  	struct fileproc *fp;
-@@ -3908,6 +4070,8 @@
+@@ -3908,6 +4086,8 @@
  		    offsetof(struct user_fsignatures, fs_cdhash /* first output element */) :
  		    offsetof(struct user_fsignatures, fs_fsignatures_size /* compat */));
  
@@ -281,7 +297,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  		if (fp->f_type != DTYPE_VNODE) {
  			error = EBADF;
  			goto out;
-@@ -3954,6 +4118,7 @@
+@@ -3954,6 +4134,7 @@
  		/*
  		 * First check if we have something loaded a this offset
  		 */
@@ -289,7 +305,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  		blob = ubc_cs_blob_get(vp, CPU_TYPE_ANY, CPU_SUBTYPE_ANY, fs.fs_file_start);
  		if (blob != NULL) {
  			/* If this is for dyld_sim revalidate the blob */
-@@ -4001,6 +4166,7 @@
+@@ -4001,6 +4182,7 @@
  			} else { /* F_ADDFILESIGS || F_ADDFILESIGS_RETURN || F_ADDFILESIGS_FOR_DYLD_SIM || F_ADDFILESIGS_INFO */
  				int resid;
  
@@ -297,7 +313,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  				error = vn_rdwr(UIO_READ,
  				    vp,
  				    (caddr_t) kernel_blob_addr,
-@@ -4011,6 +4177,7 @@
+@@ -4011,6 +4193,7 @@
  				    kauth_cred_get(),
  				    &resid,
  				    p);
@@ -305,7 +321,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  				if ((error == 0) && resid) {
  					/* kernel_blob_size rounded to a page size, but signature may be at end of file */
  					memset((void *)(kernel_blob_addr + (kernel_blob_size - resid)), 0x0, resid);
-@@ -4025,6 +4192,7 @@
+@@ -4025,6 +4208,7 @@
  			}
  
  			blob = NULL;
@@ -313,7 +329,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  			error = ubc_cs_blob_add(vp,
  			    proc_platform(p),
  			    CPU_TYPE_ANY,                       /* not for a specific architecture */
-@@ -4035,6 +4203,7 @@
+@@ -4035,6 +4219,7 @@
  			    NULL,
  			    blob_add_flags,
  			    &blob);
@@ -321,7 +337,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  
  			/* ubc_blob_add() has consumed "kernel_blob_addr" if it is zeroed */
  			if (error) {
-@@ -5293,10 +5462,10 @@
+@@ -5293,10 +5478,10 @@
  	}
  
  outdrop:
@@ -337,7 +353,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
 diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
 --- a/bsd/kern/ubc_subr.c
 +++ b/bsd/kern/ubc_subr.c
-@@ -4638,6 +4638,62 @@
+@@ -4638,6 +4638,81 @@
  	return 0;
  }
  
@@ -381,6 +397,22 @@ diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
 +	t->stamp = now; t->phase = phase;
 +	if (phase == 2) t->mac_count++;
 +}
++extern void native_root_prepare_timing_record(int, uint64_t, uint64_t, uint64_t, int, int);
++static uint64_t
++native_blob_prepare_begin(const struct native_blob_timing *t)
++{
++	return t->enabled ? native_blob_now() : 0;
++}
++static void
++native_blob_prepare_end(const struct native_blob_timing *t, uint64_t start, uint64_t bytes, int error)
++{
++	if (t->enabled) native_root_prepare_timing_record(t->pid, t->uid, bytes, native_blob_now() - start, error, 0);
++}
++static void
++native_blob_prepare_reused(const struct native_blob_timing *t)
++{
++	if (t->enabled) native_root_prepare_timing_record(t->pid, t->uid, 0, 0, 0, 1);
++}
 +static int
 +native_blob_finish(struct native_blob_timing *t, int error)
 +{
@@ -394,13 +426,16 @@ diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
 +struct native_blob_timing { int unused; };
 +#define native_blob_begin(vp, base) ((struct native_blob_timing){0})
 +#define native_blob_mark(t, phase) ((void)(t))
++#define native_blob_prepare_begin(t) ((void)(t), 0ULL)
++#define native_blob_prepare_end(t, start, bytes, error) ((void)(t), (void)(start))
++#define native_blob_prepare_reused(t) ((void)(t))
 +#define native_blob_finish(t, error) ((void)(t), (error))
 +#endif
 +
  int
  ubc_cs_blob_add(
  	struct vnode    *vp,
-@@ -4682,10 +4738,13 @@
+@@ -4682,10 +4757,13 @@
  	 * We initialize a temporary blob whose contents are then copied into an RO
  	 * blob which we allocate from the read-only allocator.
  	 */
@@ -415,7 +450,7 @@ diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
  	}
  
  	tmp_blob.csb_cpu_type = cputype;
-@@ -4753,6 +4812,7 @@
+@@ -4753,6 +4831,7 @@
  	unsigned int cs_flags = tmp_blob.csb_flags;
  	unsigned int signer_type = tmp_blob.csb_signer_type;
  
@@ -423,7 +458,7 @@ diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
  	error = mac_vnode_check_signature(
  		vp,
  		&tmp_blob,
-@@ -4761,6 +4821,7 @@
+@@ -4761,6 +4840,7 @@
  		&signer_type,
  		flags,
  		platform);
@@ -431,7 +466,7 @@ diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
  
  	if (error != 0) {
  		printf("validation of code signature failed through MACF policy: %d\n", error);
-@@ -4795,6 +4856,7 @@
+@@ -4795,6 +4875,7 @@
  		goto out;
  	}
  #endif /* CONFIG_MACF */
@@ -439,7 +474,7 @@ diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
  
  #if CODE_SIGNING_MONITOR
  	error = verify_code_signature_monitor(&tmp_blob);
-@@ -5054,6 +5116,7 @@
+@@ -5054,6 +5135,7 @@
  	error = 0;      /* success ! */
  
  out:
@@ -447,7 +482,7 @@ diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
  	if (error) {
  		if (error != EAGAIN) {
  			printf("check_signature[pid: %d]: error = %d\n", proc_getpid(current_proc()), error);
-@@ -5074,7 +5137,7 @@
+@@ -5074,7 +5156,7 @@
  		error = 0;
  	}
  
