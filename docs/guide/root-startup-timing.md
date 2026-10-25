@@ -97,3 +97,44 @@ The fixture compiles both feature modes with ASan/UBSan and exercises strict
 runtime flags, all signature variants, failure cleanup, cached signatures,
 rounded reads/residual zeroing, error preservation, bounded summaries, and separation of identical PIDs with
 different 64-bit process unique IDs.
+
+
+### Warm-source patch updates
+
+`build-xnu-4k-baseline.sh` calls `scripts/prepare-xnu-patches.py` before source
+header preparation. A stamp in `.cache/xnu-work/.git/unixnu-patchset.json` hashes
+the XNU pin and the ordered path/content of all canonical XNU and NativePrelink
+patches. A changed or missing stamp stages the complete patchset against the
+verified pin in a temporary checkout. Only after all patches apply successfully
+are changed files synchronized to the managed work source; identical bytes keep
+their mtimes. Previously recorded patch-created files are removed when absent
+from the new result. Ownership comes from the old HEAD commit tree
+(`git ls-tree -rz`), plus the previous manifest, never from the live index.
+Before any live mutation, every managed path is checked for parent symlinks,
+non-directory parents, non-file targets, and unowned destination collisions.
+The managed work/Git directory must also have no symlink parents below the
+resolved build root. Unknown user files, including staged additions and restored
+headers, are preserved. A staged addition is not implicitly owned by this helper.
+On first migration without a stamp, a canonical patch addition that already
+exists is adopted only when its type, bytes, and mode exactly match the staged
+canonical result. Different legacy content cannot be proven owned and is rejected
+without overwriting it; use recorded source provenance rather than guessing.
+After a stamp exists, new unowned collisions are rejected even for matching bytes.
+The index is preserved when the pin is unchanged; changing the pin requires a
+clean index and resets Git metadata without resetting source mtimes.
+No object, SDK, dependency archive, or header-install stamp is deleted here.
+The normal build still recompiles changed sources and performs its feature-mode
+object invalidation. Do not edit the managed work source as an implementation
+source; canonical patches remain authoritative.
+
+```sh
+python scripts/tests/check_xnu_patchset_refresh.py
+```
+
+This host-only fixture covers a pre-stamp old-patch tree migrating to changed
+contents at the same patch path, patch ordering, stable mtimes, patch additions
+and removals, failed-stage isolation, pin validation/change, and interrupted-sync
+manifest recovery while retaining object and SDK sentinels. It also verifies
+staged/untracked collision rejection, preservation of unrelated staged additions
+and their index entries, matching legacy-addition adoption, and rejection of an
+external parent symlink before any live source/stamp mutation.
