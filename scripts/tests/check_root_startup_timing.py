@@ -115,11 +115,12 @@ a=script.index("<<'PYROOT'")
 a=script.index('\n',a)+1;b=script.index('\nPYROOT',a);stamp_code=script[a:b]
 with tempfile.TemporaryDirectory(prefix='root-timing-stamp-') as t:
  p=Path(t);out=p/'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837'
+ sigobj=out/'bsd/DEVELOPMENT/kern_descrip.o'
  obj=out/'bsd/DEVELOPMENT/vm_unix.o';linked=out/'mach.development.bcm2837.unstripped.noctf';unrelated=out/'bsd/DEVELOPMENT/kern_exec.o'
  def seed():
   obj.parent.mkdir(parents=True,exist_ok=True)
-  for f in (obj,linked,unrelated):f.write_text('sentinel')
- seed();subprocess.run(['python3','-c',stamp_code,'0'],cwd=p,check=True);assert not obj.exists() and not linked.exists() and unrelated.exists()
- seed();subprocess.run(['python3','-c',stamp_code,'0'],cwd=p,check=True);assert obj.exists() and linked.exists()
- subprocess.run(['python3','-c',stamp_code,'1'],cwd=p,check=True);assert not obj.exists() and not linked.exists() and unrelated.exists()
-print('PASS actual root timing build-mode stamp: toggles invalidate vm_unix/link only, stable mode preserves objects')
+  for f in (obj,sigobj,linked,unrelated):f.write_text('sentinel')
+ seed();subprocess.run(['python3','-c',stamp_code,'0'],cwd=p,check=True);assert not obj.exists() and not sigobj.exists() and not linked.exists() and unrelated.exists()
+ seed();subprocess.run(['python3','-c',stamp_code,'0'],cwd=p,check=True);assert obj.exists() and sigobj.exists() and linked.exists()
+ subprocess.run(['python3','-c',stamp_code,'1'],cwd=p,check=True);assert not obj.exists() and not sigobj.exists() and not linked.exists() and unrelated.exists()
+print('PASS actual root timing build-mode stamp: toggles invalidate vm_unix/kern_descrip/link only, stable mode preserves objects')

@@ -59,3 +59,41 @@ error; the test does not fetch, search external cache directories, or modify the
 checkout. It reads the committed blob at that verified revision, applies the
 canonical patches in a temporary directory, then compiles the actual wrapper/helpers with mocked APIs (ASan/UBSan).
 It does not replace a real Apple SDK/kernel build.
+
+
+### Signature registration timing
+
+The same compile/runtime gates also collect `F_ADDFILESIGS`,
+`F_ADDFILESIGS_RETURN`, `F_ADDFILESIGS_INFO`, and
+`F_ADDFILESIGS_FOR_DYLD_SIM` timing; `F_ADDSIGS` is excluded.
+There is no signature-path UART output. At the first two gated shared-region
+begins, `root signature timing` emits cumulative counters for at most the first
+four distinct processes, keyed by `proc_uniqueid(p)` (at most eight lines per
+boot). Output includes both `pid` and the full 64-bit `uniqueid`; PID reuse
+therefore cannot merge different processes. Zero unique IDs are excluded.
+
+`whole_ns` starts at the signature case, after fd lookup/MAC fcntl checks, and
+ends after the existing fd cleanup. `bytes` sums successfully copied-in
+`fs_blob_size` requests, including later failures and already-present blobs.
+`read_count`, `read_requested_bytes`, `read_ns` measure `vn_rdwr` calls, including
+failed calls; requested bytes include allocator page rounding, not actual bytes
+read. `add_count`, `add_bytes`, `add_ns` measure `ubc_cs_blob_add` calls, including
+failures. `errors` counts nonzero final results. Existing-blob fast paths have no
+read/add sample. Whole includes both stages, so these times must not be added.
+Snapshots are relaxed concurrent aggregates of completed cases, not a transaction
+or exclusive CPU time; an ongoing call may be partly reflected. Earlier reports
+may omit a PID whose first signature case has not yet started. Runtime gate alone
+does not enable a compile-disabled kernel. Toggle invalidation covers both
+`vm_unix.o` and `kern_descrip.o` plus the kernel link output.
+
+Run the actual shipped signature-case mock fixture with the pinned source:
+
+```sh
+python scripts/tests/check_root_signature_timing.py --xnu-source /path/to/pinned/xnu
+python scripts/tests/check_root_startup_timing.py --xnu-source /path/to/pinned/xnu
+```
+
+The fixture compiles both feature modes with ASan/UBSan and exercises strict
+runtime flags, all signature variants, failure cleanup, cached signatures,
+rounded reads/residual zeroing, error preservation, bounded summaries, and separation of identical PIDs with
+different 64-bit process unique IDs.
