@@ -27,7 +27,6 @@ PATCHES = [ROOT / 'drivers/NativeMetal/bridge/patches' / name for name in [
     '0003-cache-device-entry-point-priming.patch', '0004-fold-constant-global-field-loads.patch',
     '0005-keep-module-decodes-and-profile-fingerprints.patch', '0006-skip-draws-without-a-pipeline.patch',
     '0007-accept-two-plane-rgb-surfaces.patch']]
-tree_diff = subprocess.check_output(['git', '-C', str(SOURCE), 'diff', 'HEAD', '--'], text=True)
 def canonical_diff(diff):
     # Independent patches touch disjoint files; Git orders the combined diff by
     # filename, rather than by the order the patches were applied.
@@ -35,7 +34,17 @@ def canonical_diff(diff):
     names = [block.splitlines()[0] for block in blocks]
     if len(set(names)) != len(names):
         raise SystemExit('Overlapping recorded patches require an explicit combined-source update')
-    return ''.join(sorted(blocks, key=lambda block: block.splitlines()[0]))
+    # Git chooses its hash abbreviation length from repository size/config.
+    # These index hashes are redundant: the base revision is pinned and every
+    # path, mode and line of the complete diff is compared below. Normalize only
+    # index metadata so the same source is accepted on fresh macOS runners.
+    ordered = ''.join(sorted(blocks, key=lambda block: block.splitlines()[0]))
+    return re.sub(r'^index [0-9a-f]+\.\.[0-9a-f]+(?= |$)', 'index <base>..<result>', ordered, flags=re.M)
+
+
+def source_diff():
+    return canonical_diff(subprocess.check_output(
+        ['git', '-C', str(SOURCE), 'diff', '--no-ext-diff', '--no-textconv', 'HEAD', '--'], text=True))
 
 
 expected = ''
@@ -43,11 +52,12 @@ states = [expected]
 for patch in PATCHES:
     expected += patch.read_text()
     states.append(canonical_diff(expected))
+tree_diff = source_diff()
 if tree_diff not in states:
     raise SystemExit('Translator source differs from the pinned revision plus its recorded patches')
 for patch in PATCHES[states.index(tree_diff):]:
     subprocess.run(['git', '-C', str(SOURCE), 'apply', str(patch)], check=True)
-if subprocess.check_output(['git', '-C', str(SOURCE), 'diff', 'HEAD', '--'], text=True) != canonical_diff(expected):
+if source_diff() != canonical_diff(expected):
     raise SystemExit('Translator patch result differs from its exact recorded source')
 out = ROOT / 'build/native-metal-bridge'
 out.mkdir(parents=True, exist_ok=True)
