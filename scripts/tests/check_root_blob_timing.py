@@ -67,7 +67,7 @@ static uint64_t mach_absolute_time(void){clocks++;return ticks+=10;}
 static void absolutetime_to_nanoseconds(uint64_t n,uint64_t*out){*out=n;}
 static int PE_parse_boot_argn(const char*n,void*v,size_t z){assert(!strcmp(n,"native-root-timing")&&z==sizeof(flag));*(unsigned*)v=flag;return present;}
 static int mock_printf(const char*f,...){
- if(!strncmp(f,"root signature timing",21)){assert(!locked&&!allocations);va_list ap;va_start(ap,f);size_t n=strlen(output);vsnprintf(output+n,sizeof(output)-n,f,ap);va_end(ap);summary_logs++;}
+ if(!strncmp(f,"RST ",4)){assert(!locked&&!allocations);va_list ap;va_start(ap,f);size_t n=strlen(output);vsnprintf(output+n,sizeof(output)-n,f,ap);va_end(ap);summary_logs++;}
  else original_logs++;
  return 0;
 }
@@ -124,7 +124,7 @@ for(flag=0;flag<4;flag++)for(present=0;present<2;present++)for(phase=0;phase<=12
  assert(!allocations);int active=0;
 #if XNU_ROOT_TIMING
  active=present&&flag==1;
- if(active){struct native_sig_slot*s=&native_sig_slots[0];assert(s->uniqueid==102&&s->blob_count==1&&s->init_count==1&&s->blob_errors==(uint64_t)(error!=0));assert(s->mac_count==(uint64_t)mac_calls);assert(s->init_ns==10);assert(s->mac_ns==10*(uint64_t)mac_calls);assert(s->init_ns+s->pre_ns+s->mac_ns+s->post_ns==ticks-10);assert(vid_reads==1);native_root_signature_timing_report();assert(summary_logs==1&&strstr(output,"blob_count=1"));}
+ if(active){struct native_sig_slot*s=&native_sig_slots[0];assert(s->uniqueid==102&&s->blob_count==1&&s->init_count==1&&s->blob_errors==(uint64_t)(error!=0));assert(s->mac_count==(uint64_t)mac_calls);assert(s->init_ns==10);assert(s->mac_ns==10*(uint64_t)mac_calls);assert(s->init_ns+s->pre_ns+s->mac_ns+s->post_ns==ticks-10);assert(vid_reads==1);native_root_signature_timing_report();assert(summary_logs==4&&strstr(output,"bc=1"));}
 #endif
  if(!active)assert(!clocks&&!vid_reads);
 }
@@ -137,7 +137,7 @@ native_root_blob_timing_record(2,202,0x1234,7,4096,ns,1,0);
 assert(!native_sig_slots[1].vnode_cross);
 native_root_blob_timing_record(2,202,0x1234,7,0,ns,1,0);
 assert(native_sig_slots[1].vnode_cross==1&&native_sig_slots[1].duplicate_vnode==0x1234&&native_sig_slots[1].duplicate_vid==7&&native_sig_slots[1].duplicate_peer==102);
-native_root_signature_timing_report();assert(strstr(output,"duplicate_vnode=1234 duplicate_vid=7 duplicate_base=0 duplicate_peer=102"));summary_logs=0;
+native_root_signature_timing_report();assert(strstr(output,"a=1234 v=7 o=0 peer=102"));summary_logs=0;
 /* Deterministic busy path drops only metadata, never intervals. */
 native_sig_vnodes_busy=1;native_root_blob_timing_record(2,202,0x1234,7,0,ns,1,EIO);native_sig_vnodes_busy=0;
 assert(native_sig_slots[1].blob_count==4&&native_sig_slots[1].vnode_dropped==1&&native_sig_slots[1].blob_errors==1);
@@ -153,7 +153,7 @@ assert(native_sig_slots[1].vnode_cross+native_sig_slots[1].vnode_dropped==1001);
 assert(!summary_logs&&!original_logs);
 /* Metadata is copied: destroying the vnode does not cause a later dereference. */
 reset();flag=1;present=1;phase=0;struct ubc_info info={0};struct vnode*v=malloc(sizeof(*v));*v=(struct vnode){9,&info};vm_address_t addr=0;struct cs_blob*out=NULL;
-assert(!ubc_cs_blob_add(v,0,CPU_TYPE_ANY,0,0,&addr,4096,NULL,0,&out));zfree_ro(0,out);free(v);native_root_signature_timing_report();assert(summary_logs==1);
+assert(!ubc_cs_blob_add(v,0,CPU_TYPE_ANY,0,0,&addr,4096,NULL,0,&out));zfree_ro(0,out);free(v);native_root_signature_timing_report();assert(summary_logs==4);
 #endif
 puts("PASS shipped blob-add: strict compile/runtime gates, disjoint phases, MACF on/off, errors/cleanup/EAGAIN, vid+offset identity, bounded metadata/drop, concurrent counters and freed-vnode summary");}
 '''

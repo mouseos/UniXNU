@@ -100,7 +100,7 @@ diff --git a/bsd/vm/vm_unix.c b/bsd/vm/vm_unix.c
 diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
 --- a/bsd/kern/kern_descrip.c
 +++ b/bsd/kern/kern_descrip.c
-@@ -2740,9 +2740,162 @@
+@@ -2740,9 +2740,171 @@
  	return sys_fcntl_outdrop(p, fd, fp, vp, error);
  }
  
@@ -236,11 +236,20 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
 +		int pid = __atomic_load_n(&s->pid, __ATOMIC_RELAXED);
 +		if (!pid) continue;
 +#define SIG_GET(field) ((unsigned long long)__atomic_load_n(&s->field, __ATOMIC_RELAXED))
-+		printf("root signature timing pid=%d uniqueid=%llu count=%llu bytes=%llu whole_ns=%llu errors=%llu read_count=%llu read_requested_bytes=%llu read_ns=%llu add_count=%llu add_bytes=%llu add_ns=%llu blob_count=%llu blob_errors=%llu init_count=%llu init_ns=%llu pre_ns=%llu mac_count=%llu mac_ns=%llu post_ns=%llu vnode_cross=%llu vnode_dropped=%llu duplicate_vnode=%llx duplicate_vid=%llu duplicate_base=%llx duplicate_peer=%llu\n",
-+		    pid, SIG_GET(uniqueid), SIG_GET(count), SIG_GET(bytes), SIG_GET(whole_ns), SIG_GET(errors),
-+		    SIG_GET(read_count), SIG_GET(read_bytes), SIG_GET(read_ns), SIG_GET(add_count), SIG_GET(add_bytes), SIG_GET(add_ns),
-+		    SIG_GET(blob_count), SIG_GET(blob_errors), SIG_GET(init_count), SIG_GET(init_ns), SIG_GET(pre_ns),
-+		    SIG_GET(mac_count), SIG_GET(mac_ns), SIG_GET(post_ns), SIG_GET(vnode_cross), SIG_GET(vnode_dropped),
++		/* Each newline-terminated record is <=200 bytes even at full-width
++		 * counter values, below the 255-byte console print buffer limit.
++		 * q identifies the two concurrent reports; no diagnostic lock held. */
++		printf("RST sig q=%u p=%d u=%llu c=%llu b=%llu w=%llu e=%llu rc=%llu rn=%llu\n",
++		    n + 1, pid, SIG_GET(uniqueid), SIG_GET(count), SIG_GET(bytes), SIG_GET(whole_ns),
++		    SIG_GET(errors), SIG_GET(read_count), SIG_GET(read_ns));
++		printf("RST add q=%u p=%d u=%llu rb=%llu ac=%llu ab=%llu an=%llu bc=%llu be=%llu\n",
++		    n + 1, pid, SIG_GET(uniqueid), SIG_GET(read_bytes), SIG_GET(add_count), SIG_GET(add_bytes),
++		    SIG_GET(add_ns), SIG_GET(blob_count), SIG_GET(blob_errors));
++		printf("RST phase q=%u p=%d u=%llu ic=%llu in=%llu pre=%llu mc=%llu mn=%llu post=%llu\n",
++		    n + 1, pid, SIG_GET(uniqueid), SIG_GET(init_count), SIG_GET(init_ns), SIG_GET(pre_ns),
++		    SIG_GET(mac_count), SIG_GET(mac_ns), SIG_GET(post_ns));
++		printf("RST vnode q=%u p=%d u=%llu cross=%llu drop=%llu a=%llx v=%llu o=%llx peer=%llu\n",
++		    n + 1, pid, SIG_GET(uniqueid), SIG_GET(vnode_cross), SIG_GET(vnode_dropped),
 +		    SIG_GET(duplicate_vnode), SIG_GET(duplicate_vid), SIG_GET(duplicate_base), SIG_GET(duplicate_peer));
 +#undef SIG_GET
 +	}
@@ -263,7 +272,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  	int fd = uap->fd;
  	int cmd = uap->cmd;
  	struct fileproc *fp;
-@@ -3908,6 +4061,8 @@
+@@ -3908,6 +4070,8 @@
  		    offsetof(struct user_fsignatures, fs_cdhash /* first output element */) :
  		    offsetof(struct user_fsignatures, fs_fsignatures_size /* compat */));
  
@@ -272,7 +281,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  		if (fp->f_type != DTYPE_VNODE) {
  			error = EBADF;
  			goto out;
-@@ -3954,6 +4109,7 @@
+@@ -3954,6 +4118,7 @@
  		/*
  		 * First check if we have something loaded a this offset
  		 */
@@ -280,7 +289,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  		blob = ubc_cs_blob_get(vp, CPU_TYPE_ANY, CPU_SUBTYPE_ANY, fs.fs_file_start);
  		if (blob != NULL) {
  			/* If this is for dyld_sim revalidate the blob */
-@@ -4001,6 +4157,7 @@
+@@ -4001,6 +4166,7 @@
  			} else { /* F_ADDFILESIGS || F_ADDFILESIGS_RETURN || F_ADDFILESIGS_FOR_DYLD_SIM || F_ADDFILESIGS_INFO */
  				int resid;
  
@@ -288,7 +297,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  				error = vn_rdwr(UIO_READ,
  				    vp,
  				    (caddr_t) kernel_blob_addr,
-@@ -4011,6 +4168,7 @@
+@@ -4011,6 +4177,7 @@
  				    kauth_cred_get(),
  				    &resid,
  				    p);
@@ -296,7 +305,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  				if ((error == 0) && resid) {
  					/* kernel_blob_size rounded to a page size, but signature may be at end of file */
  					memset((void *)(kernel_blob_addr + (kernel_blob_size - resid)), 0x0, resid);
-@@ -4025,6 +4183,7 @@
+@@ -4025,6 +4192,7 @@
  			}
  
  			blob = NULL;
@@ -304,7 +313,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  			error = ubc_cs_blob_add(vp,
  			    proc_platform(p),
  			    CPU_TYPE_ANY,                       /* not for a specific architecture */
-@@ -4035,6 +4194,7 @@
+@@ -4035,6 +4203,7 @@
  			    NULL,
  			    blob_add_flags,
  			    &blob);
@@ -312,7 +321,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  
  			/* ubc_blob_add() has consumed "kernel_blob_addr" if it is zeroed */
  			if (error) {
-@@ -5293,10 +5453,10 @@
+@@ -5293,10 +5462,10 @@
  	}
  
  outdrop:
