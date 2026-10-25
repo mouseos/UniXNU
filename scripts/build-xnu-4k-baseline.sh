@@ -844,7 +844,7 @@ out = Path('build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837')
 stamp = out / '.root-timing-mode'
 mode = sys.argv[1]
 if not stamp.exists() or stamp.read_text() != mode:
-    for relative in ('bsd/DEVELOPMENT/vm_unix.o', 'bsd/DEVELOPMENT/kern_descrip.o', 'mach.development.bcm2837.unstripped.noctf'):
+    for relative in ('bsd/DEVELOPMENT/vm_unix.o', 'bsd/DEVELOPMENT/kern_descrip.o', 'bsd/DEVELOPMENT/ubc_subr.o', 'mach.development.bcm2837.unstripped.noctf'):
         (out / relative).unlink(missing_ok=True)
     out.mkdir(parents=True, exist_ok=True)
     stamp.write_text(mode)

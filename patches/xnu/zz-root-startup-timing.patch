@@ -13,7 +13,7 @@ diff --git a/bsd/vm/vm_unix.c b/bsd/vm/vm_unix.c
  
  #include <kern/ecc.h>
  #include <kern/task.h>
-@@ -2780,6 +2785,59 @@
+@@ -2707,6 +2712,59 @@
   * Subsequent processes will just use the populated shared region without
   * requiring any further setup.
   */
@@ -73,7 +73,7 @@ diff --git a/bsd/vm/vm_unix.c b/bsd/vm/vm_unix.c
  static int
  _shared_region_map_and_slide(
  	struct proc                         *p,
-@@ -2793,6 +2851,7 @@
+@@ -2720,6 +2778,7 @@
  	struct _sr_file_mappings        *sr_file_mappings = NULL;
  	struct vnode                    *rdir_vp = NULL;
  	struct vm_shared_region         *shared_region = NULL;
@@ -81,7 +81,7 @@ diff --git a/bsd/vm/vm_unix.c b/bsd/vm/vm_unix.c
  
  	/*
  	 * Get a reference to the current proc's root dir.
-@@ -2815,6 +2874,7 @@
+@@ -2742,6 +2801,7 @@
  	    &sr_file_mappings, &shared_region, rdir_vp);
  	if (error != 0) {
  		vnode_put(rdir_vp);
@@ -89,7 +89,7 @@ diff --git a/bsd/vm/vm_unix.c b/bsd/vm/vm_unix.c
  		return error;
  	}
  
-@@ -2863,6 +2923,7 @@
+@@ -2790,6 +2850,7 @@
  		(void *)VM_KERNEL_ADDRPERM(current_thread()),
  		proc_getpid(p), p->p_comm));
  
@@ -100,7 +100,7 @@ diff --git a/bsd/vm/vm_unix.c b/bsd/vm/vm_unix.c
 diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
 --- a/bsd/kern/kern_descrip.c
 +++ b/bsd/kern/kern_descrip.c
-@@ -2740,9 +2740,106 @@
+@@ -2740,9 +2740,162 @@
  	return sys_fcntl_outdrop(p, fd, fp, vp, error);
  }
  
@@ -111,7 +111,9 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
 +#include <kern/clock.h>
 +#include <pexpert/pexpert.h>
 +struct native_sig_slot { int pid; uint64_t uniqueid, count, bytes, whole_ns, errors;
-+    uint64_t read_count, read_bytes, read_ns, add_count, add_bytes, add_ns; };
++    uint64_t read_count, read_bytes, read_ns, add_count, add_bytes, add_ns;
++    uint64_t blob_count, blob_errors, init_count, init_ns, pre_ns, mac_count, mac_ns, post_ns;
++    uint64_t vnode_cross, vnode_dropped, duplicate_vnode, duplicate_vid, duplicate_base, duplicate_peer; };
 +static struct native_sig_slot native_sig_slots[4];
 +static unsigned native_sig_reports;
 +struct native_sig_timing { struct native_sig_slot *slot; uint64_t begin, bytes;
@@ -123,24 +125,75 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
 +	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
 +	return ns;
 +}
-+static void
-+native_sig_begin(struct native_sig_timing *t, proc_t p, int cmd)
++static struct native_sig_slot *
++native_sig_slot_get(int pid, uint64_t uniqueid)
 +{
-+	unsigned flag = 0;
-+	if (cmd == F_ADDSIGS || !PE_parse_boot_argn("native-root-timing", &flag, sizeof(flag)) || flag != 1) return;
-+	int pid = proc_getpid(p);
-+	uint64_t uniqueid = proc_uniqueid(p);
-+	if (pid <= 0 || uniqueid == 0) return;
++	if (pid <= 0 || uniqueid == 0) return NULL;
 +	for (unsigned i = 0; i < 4; i++) {
 +		uint64_t expected = 0;
 +		if (__atomic_load_n(&native_sig_slots[i].uniqueid, __ATOMIC_RELAXED) == uniqueid ||
 +		    __atomic_compare_exchange_n(&native_sig_slots[i].uniqueid, &expected, uniqueid, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED) || expected == uniqueid) {
 +			__atomic_store_n(&native_sig_slots[i].pid, pid, __ATOMIC_RELAXED);
-+			t->slot = &native_sig_slots[i];
-+			t->begin = native_sig_now();
-+			return;
++			return &native_sig_slots[i];
 +		}
 +	}
++	return NULL;
++}
++static void
++native_sig_begin(struct native_sig_timing *t, proc_t p, int cmd)
++{
++	unsigned flag = 0;
++	if (cmd == F_ADDSIGS || !PE_parse_boot_argn("native-root-timing", &flag, sizeof(flag)) || flag != 1) return;
++	t->slot = native_sig_slot_get(proc_getpid(p), proc_uniqueid(p));
++	if (t->slot) t->begin = native_sig_now();
++}
++/* Values only, never retained vnode references. The bounded table is observed
++ * with a nonblocking try-lock after the original blob-add cleanup. Contention
++ * or exhaustion drops only the duplicate sample, never timing counters. */
++struct native_sig_vnode { uintptr_t address; uint32_t vid; int64_t base;
++    uint64_t first_uid, second_uid; unsigned seen; };
++static struct native_sig_vnode native_sig_vnodes[64];
++static unsigned native_sig_vnodes_busy;
++void native_root_blob_timing_record(int, uint64_t, uintptr_t, uint32_t, int64_t,
++    const uint64_t [4], unsigned, int);
++void
++native_root_blob_timing_record(int pid, uint64_t uid, uintptr_t address, uint32_t vid,
++    int64_t base, const uint64_t ns[4], unsigned mac_count, int error)
++{
++	struct native_sig_slot *s = native_sig_slot_get(pid, uid);
++	if (!s) return;
++#define BLOB_ACC(field, n) __atomic_fetch_add(&s->field, (n), __ATOMIC_RELAXED)
++	BLOB_ACC(blob_count, 1); BLOB_ACC(blob_errors, error != 0);
++	BLOB_ACC(init_count, 1); BLOB_ACC(init_ns, ns[0]); BLOB_ACC(pre_ns, ns[1]);
++	BLOB_ACC(mac_count, mac_count); BLOB_ACC(mac_ns, ns[2]); BLOB_ACC(post_ns, ns[3]);
++	unsigned expected = 0;
++	if (!__atomic_compare_exchange_n(&native_sig_vnodes_busy, &expected, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
++		BLOB_ACC(vnode_dropped, 1);
++		return;
++	}
++	unsigned bit = 1U << (unsigned)(s - native_sig_slots);
++	unsigned i;
++	for (i = 0; i < 64; i++) {
++		struct native_sig_vnode *v = &native_sig_vnodes[i];
++		if (!v->seen) {
++			v->address = address; v->vid = vid; v->base = base; v->first_uid = uid; v->seen = bit;
++			break;
++		}
++		if (v->address != address || v->vid != vid || v->base != base) continue;
++		if (v->seen & ~bit) {
++			if (uid != v->first_uid && !v->second_uid) v->second_uid = uid;
++			BLOB_ACC(vnode_cross, 1);
++			__atomic_store_n(&s->duplicate_vnode, address, __ATOMIC_RELAXED);
++			__atomic_store_n(&s->duplicate_vid, vid, __ATOMIC_RELAXED);
++			__atomic_store_n(&s->duplicate_base, (uint64_t)base, __ATOMIC_RELAXED);
++			__atomic_store_n(&s->duplicate_peer, uid == v->first_uid ? v->second_uid : v->first_uid, __ATOMIC_RELAXED);
++		}
++		v->seen |= bit;
++		break;
++	}
++	if (i == 64) BLOB_ACC(vnode_dropped, 1);
++	__atomic_store_n(&native_sig_vnodes_busy, 0, __ATOMIC_RELEASE);
++#undef BLOB_ACC
 +}
 +static uint64_t
 +native_sig_stage_begin(const struct native_sig_timing *t)
@@ -183,9 +236,12 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
 +		int pid = __atomic_load_n(&s->pid, __ATOMIC_RELAXED);
 +		if (!pid) continue;
 +#define SIG_GET(field) ((unsigned long long)__atomic_load_n(&s->field, __ATOMIC_RELAXED))
-+		printf("root signature timing pid=%d uniqueid=%llu count=%llu bytes=%llu whole_ns=%llu errors=%llu read_count=%llu read_requested_bytes=%llu read_ns=%llu add_count=%llu add_bytes=%llu add_ns=%llu\n",
++		printf("root signature timing pid=%d uniqueid=%llu count=%llu bytes=%llu whole_ns=%llu errors=%llu read_count=%llu read_requested_bytes=%llu read_ns=%llu add_count=%llu add_bytes=%llu add_ns=%llu blob_count=%llu blob_errors=%llu init_count=%llu init_ns=%llu pre_ns=%llu mac_count=%llu mac_ns=%llu post_ns=%llu vnode_cross=%llu vnode_dropped=%llu duplicate_vnode=%llx duplicate_vid=%llu duplicate_base=%llx duplicate_peer=%llu\n",
 +		    pid, SIG_GET(uniqueid), SIG_GET(count), SIG_GET(bytes), SIG_GET(whole_ns), SIG_GET(errors),
-+		    SIG_GET(read_count), SIG_GET(read_bytes), SIG_GET(read_ns), SIG_GET(add_count), SIG_GET(add_bytes), SIG_GET(add_ns));
++		    SIG_GET(read_count), SIG_GET(read_bytes), SIG_GET(read_ns), SIG_GET(add_count), SIG_GET(add_bytes), SIG_GET(add_ns),
++		    SIG_GET(blob_count), SIG_GET(blob_errors), SIG_GET(init_count), SIG_GET(init_ns), SIG_GET(pre_ns),
++		    SIG_GET(mac_count), SIG_GET(mac_ns), SIG_GET(post_ns), SIG_GET(vnode_cross), SIG_GET(vnode_dropped),
++		    SIG_GET(duplicate_vnode), SIG_GET(duplicate_vid), SIG_GET(duplicate_base), SIG_GET(duplicate_peer));
 +#undef SIG_GET
 +	}
 +}
@@ -207,7 +263,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  	int fd = uap->fd;
  	int cmd = uap->cmd;
  	struct fileproc *fp;
-@@ -3908,6 +4005,8 @@
+@@ -3908,6 +4061,8 @@
  		    offsetof(struct user_fsignatures, fs_cdhash /* first output element */) :
  		    offsetof(struct user_fsignatures, fs_fsignatures_size /* compat */));
  
@@ -216,7 +272,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  		if (fp->f_type != DTYPE_VNODE) {
  			error = EBADF;
  			goto out;
-@@ -3954,6 +4053,7 @@
+@@ -3954,6 +4109,7 @@
  		/*
  		 * First check if we have something loaded a this offset
  		 */
@@ -224,7 +280,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  		blob = ubc_cs_blob_get(vp, CPU_TYPE_ANY, CPU_SUBTYPE_ANY, fs.fs_file_start);
  		if (blob != NULL) {
  			/* If this is for dyld_sim revalidate the blob */
-@@ -4001,6 +4101,7 @@
+@@ -4001,6 +4157,7 @@
  			} else { /* F_ADDFILESIGS || F_ADDFILESIGS_RETURN || F_ADDFILESIGS_FOR_DYLD_SIM || F_ADDFILESIGS_INFO */
  				int resid;
  
@@ -232,7 +288,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  				error = vn_rdwr(UIO_READ,
  				    vp,
  				    (caddr_t) kernel_blob_addr,
-@@ -4011,6 +4112,7 @@
+@@ -4011,6 +4168,7 @@
  				    kauth_cred_get(),
  				    &resid,
  				    p);
@@ -240,7 +296,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  				if ((error == 0) && resid) {
  					/* kernel_blob_size rounded to a page size, but signature may be at end of file */
  					memset((void *)(kernel_blob_addr + (kernel_blob_size - resid)), 0x0, resid);
-@@ -4025,6 +4127,7 @@
+@@ -4025,6 +4183,7 @@
  			}
  
  			blob = NULL;
@@ -248,7 +304,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  			error = ubc_cs_blob_add(vp,
  			    proc_platform(p),
  			    CPU_TYPE_ANY,                       /* not for a specific architecture */
-@@ -4035,6 +4138,7 @@
+@@ -4035,6 +4194,7 @@
  			    NULL,
  			    blob_add_flags,
  			    &blob);
@@ -256,7 +312,7 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  
  			/* ubc_blob_add() has consumed "kernel_blob_addr" if it is zeroed */
  			if (error) {
-@@ -5293,10 +5397,10 @@
+@@ -5293,10 +5453,10 @@
  	}
  
  outdrop:
@@ -269,3 +325,125 @@ diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
  }
  
  
+diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
+--- a/bsd/kern/ubc_subr.c
++++ b/bsd/kern/ubc_subr.c
+@@ -4638,6 +4638,62 @@
+ 	return 0;
+ }
+ 
++/* Optional disjoint blob-add wall intervals. INIT is exactly the initial
++ * cs_blob_init_validated call; PRE ends immediately before MACF (or POST when
++ * MACF is absent). MAC is exactly the callback; POST includes subsequent work,
++ * vnode lock/wait and original cleanup. No pointer survives as a reference. */
++#if defined(XNU_ROOT_TIMING) && XNU_ROOT_TIMING
++#include <kern/clock.h>
++#include <pexpert/pexpert.h>
++extern void native_root_blob_timing_record(int, uint64_t, uintptr_t, uint32_t, int64_t,
++    const uint64_t [4], unsigned, int);
++struct native_blob_timing { int enabled, pid; uint64_t uid; uintptr_t address;
++    uint32_t vid; int64_t base; uint64_t stamp, ns[4]; unsigned phase, mac_count; };
++static uint64_t
++native_blob_now(void)
++{
++	uint64_t ns = 0;
++	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
++	return ns;
++}
++static struct native_blob_timing
++native_blob_begin(struct vnode *vp, int64_t base)
++{
++	struct native_blob_timing t = {0};
++	unsigned flag = 0;
++	if (!PE_parse_boot_argn("native-root-timing", &flag, sizeof(flag)) || flag != 1) return t;
++	proc_t p = current_proc();
++	t.pid = proc_getpid(p); t.uid = proc_uniqueid(p);
++	if (t.pid <= 0 || !t.uid) return t;
++	t.enabled = 1; t.address = (uintptr_t)vp; t.vid = vnode_vid(vp); t.base = base;
++	t.stamp = native_blob_now();
++	return t;
++}
++static void
++native_blob_mark(struct native_blob_timing *t, unsigned phase)
++{
++	if (!t->enabled) return;
++	uint64_t now = native_blob_now();
++	t->ns[t->phase] += now - t->stamp;
++	t->stamp = now; t->phase = phase;
++	if (phase == 2) t->mac_count++;
++}
++static int
++native_blob_finish(struct native_blob_timing *t, int error)
++{
++	if (t->enabled) {
++		native_blob_mark(t, 3);
++		native_root_blob_timing_record(t->pid, t->uid, t->address, t->vid, t->base, t->ns, t->mac_count, error);
++	}
++	return error;
++}
++#else
++struct native_blob_timing { int unused; };
++#define native_blob_begin(vp, base) ((struct native_blob_timing){0})
++#define native_blob_mark(t, phase) ((void)(t))
++#define native_blob_finish(t, error) ((void)(t), (error))
++#endif
++
+ int
+ ubc_cs_blob_add(
+ 	struct vnode    *vp,
+@@ -4682,10 +4738,13 @@
+ 	 * We initialize a temporary blob whose contents are then copied into an RO
+ 	 * blob which we allocate from the read-only allocator.
+ 	 */
++	struct native_blob_timing timing = native_blob_begin(vp, base_offset);
+ 	error = cs_blob_init_validated(addr, size, &tmp_blob, &cd);
++	native_blob_mark(&timing, 1);
+ 	if (error != 0) {
++		native_blob_mark(&timing, 3);
+ 		printf("unable to create a validated cs_blob object: %d\n", error);
+-		return error;
++		return native_blob_finish(&timing, error);
+ 	}
+ 
+ 	tmp_blob.csb_cpu_type = cputype;
+@@ -4753,6 +4812,7 @@
+ 	unsigned int cs_flags = tmp_blob.csb_flags;
+ 	unsigned int signer_type = tmp_blob.csb_signer_type;
+ 
++	native_blob_mark(&timing, 2);
+ 	error = mac_vnode_check_signature(
+ 		vp,
+ 		&tmp_blob,
+@@ -4761,6 +4821,7 @@
+ 		&signer_type,
+ 		flags,
+ 		platform);
++	native_blob_mark(&timing, 3);
+ 
+ 	if (error != 0) {
+ 		printf("validation of code signature failed through MACF policy: %d\n", error);
+@@ -4795,6 +4856,7 @@
+ 		goto out;
+ 	}
+ #endif /* CONFIG_MACF */
++	native_blob_mark(&timing, 3);
+ 
+ #if CODE_SIGNING_MONITOR
+ 	error = verify_code_signature_monitor(&tmp_blob);
+@@ -5054,6 +5116,7 @@
+ 	error = 0;      /* success ! */
+ 
+ out:
++	native_blob_mark(&timing, 3);
+ 	if (error) {
+ 		if (error != EAGAIN) {
+ 			printf("check_signature[pid: %d]: error = %d\n", proc_getpid(current_proc()), error);
+@@ -5074,7 +5137,7 @@
+ 		error = 0;
+ 	}
+ 
+-	return error;
++	return native_blob_finish(&timing, error);
+ }
+ 
+ #if CONFIG_SUPPLEMENTAL_SIGNATURES

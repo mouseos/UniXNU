@@ -138,3 +138,58 @@ manifest recovery while retaining object and SDK sentinels. It also verifies
 staged/untracked collision rejection, preservation of unrelated staged additions
 and their index entries, matching legacy-addition adoption, and rejection of an
 external parent symlink before any live source/stamp mutation.
+
+
+### Blob-add internal intervals and duplicate observations
+
+The same strict compile/runtime gates split `ubc_cs_blob_add` into disjoint wall
+intervals. All original results, `EAGAIN` success normalization, ownership and
+cleanup remain unchanged. No diagnostic UART is performed on this path. The
+existing at-most-eight `root signature timing` summary lines append:
+
+- `blob_count` / `blob_errors`: completed blob-add calls and final nonzero results.
+- `init_count` / `init_ns`: the initial `cs_blob_init_validated` call only,
+  including that callee's validation, hashing and internal failure cleanup.
+- `pre_ns`: after init returns and before MACF is entered; includes first-stage
+  reconstitution, RO allocation/update, and monitor registration when compiled.
+- `mac_count` / `mac_ns`: `mac_vnode_check_signature` only, including failures.
+  Both remain zero when MACF is not compiled or an earlier operation fails.
+- `post_ns`: after MACF returns (or after the CONFIG_MACF block when absent)
+  through subsequent processing, vnode lock acquisition/work, and original
+  cleanup. Early errors switch to POST at their cleanup entry; initial-init
+  failure switches before its original error print and direct return.
+
+These four intervals partition the instrumented blob-add body through its
+original cleanup; the final diagnostic collector itself is outside that time.
+They are elapsed wall times, including nested I/O, scheduling and lock waits,
+not exclusive CPU time. `post_ns` does not isolate lock contention from other
+postprocessing. Blob calls from exec or other paths are counted too, so their
+counts need not equal the F_ADDFILESIGS `add_count`. Both collectors share the
+same four process-unique-ID slots. Compilation-mode invalidation now also covers
+`ubc_subr.o`.
+
+A 64-entry, first-seen table records scalar vnode address, `vnode_vid` and signed
+file base offset while the caller still owns the vnode. It retains no vnode or
+process reference and never dereferences the stored address later. `vnode_cross`
+counts observations of an identity already observed for a different process
+unique ID; it does not prove that calls ran simultaneously, or that validation
+can safely be reused. A different vid or base offset is a different identity.
+`duplicate_vnode` (hex), `duplicate_vid`, `duplicate_base` (hex) and
+`duplicate_peer` (process unique ID) show the last such observation for that slot.
+The address is diagnostic identity metadata, not a dereferenceable pointer.
+
+A nonblocking try-lock protects only this bounded table, after original cleanup.
+Contention or table exhaustion increments `vnode_dropped`; phase totals still
+accumulate. Consequently duplicate counts are conservative samples. Relaxed
+concurrent summaries can observe partial counter updates or a mixed last-metadata
+snapshot; they do not add any new output lines beyond the existing cap.
+
+```sh
+python scripts/tests/check_root_blob_timing.py --xnu-source /path/to/pinned/xnu
+```
+
+This compiles the actual patched blob-add body and collectors with API mocks in
+both compile modes and MACF on/off, under ASan/UBSan. It checks strict flags,
+init/MACF/pre/post failures, cleanup and EAGAIN normalization, disjoint intervals,
+vid/offset and process-identity separation, bounded/drop behavior, concurrent
+updates, and summary output after the original vnode has been freed.
