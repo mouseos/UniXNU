@@ -5,6 +5,7 @@
 (runtime_examples.ll) and its function-constant fixture are assembled to AIR with llvm-as and embedded for the self-tests. Only generated build files hold local paths; nothing here
 is committed. Output: build/native-metal-bridge/<target>/libnative_metal_bridge.a"""
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -98,4 +99,10 @@ library = target_dir / triple / 'release/libnative_metal_bridge.a'
 final = out / args.target / 'libnative_metal_bridge.a'
 final.parent.mkdir(exist_ok=True)
 shutil.copyfile(library, final)
+with final.open('rb') as stream:
+    digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+final.with_suffix('.json').write_text(json.dumps({
+    'target': args.target, 'portable_sha2': args.portable_sha2,
+    'translator': PIN, 'library_sha256': digest,
+}, indent=2) + '\n')
 print('PASS: native Metal bridge static library for %s (%d bytes); translator %s' % (args.target, final.stat().st_size, PIN[:12]))

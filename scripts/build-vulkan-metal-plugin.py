@@ -65,9 +65,12 @@ if not (args.skip_bridge and BRIDGE.is_file()):
     subprocess.run(['python3', ROOT / 'scripts/build-native-metal-bridge.py', '--target', 'ios'] +
                    (['--portable-sha2'] if args.portable_sha2 else []), check=True)
 elif args.portable_sha2:
-    import tomllib
-    manifest = ROOT / 'build/native-metal-bridge/Cargo.toml'
-    if not manifest.is_file() or 'force-soft' not in tomllib.loads(manifest.read_text())['dependencies']['sha2'].get('features', []):
+    import hashlib
+    record = BRIDGE.with_suffix('.json')
+    metadata = json.loads(record.read_text()) if record.is_file() else {}
+    with BRIDGE.open('rb') as stream:
+        digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+    if metadata.get('target') != 'ios' or metadata.get('portable_sha2') is not True or metadata.get('library_sha256') != digest:
         raise SystemExit('Existing bridge is not portable SHA2; rebuild without --skip-bridge')
 sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
 base = ['-target', 'arm64-apple-ios17.0', '-isysroot', sdk, '-O2', '-g', '-Wall', '-Wextra', '-Werror', '-fstack-protector-strong']
