@@ -61,6 +61,21 @@ jobs:
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix unifdef)/bin" >> "$GITHUB_PATH"
 
+      - name: Install PowerVR Vulkan host tools
+        if: ${{ inputs.powervr_probe && inputs.powervr_metal }}
+        run: |
+          set -euo pipefail
+          brew install pkgconf bison flex spirv-llvm-translator spirv-tools
+          for formula in bison flex llvm; do
+            echo "$(brew --prefix "$formula")/bin" >> "$GITHUB_PATH"
+          done
+          for formula in spirv-llvm-translator spirv-tools llvm; do
+            prefix="$(brew --prefix "$formula")"
+            export PKG_CONFIG_PATH="$prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          done
+          pkg-config --exists LLVMSPIRVLib SPIRV-Tools
+          pkg-config --modversion LLVMSPIRVLib SPIRV-Tools
+
       - name: Start the SSH session
         env:
           GH_TOKEN: ${{ github.token }}
@@ -157,6 +172,13 @@ jobs:
           deadline=$((SECONDS + KEEP_MINUTES * 60))
           while [ ! -f /tmp/a04br3-done ] && [ "$SECONDS" -lt "$deadline" ]; do sleep 60; done
           "$RUNNER_TEMP/upterm-bin/upterm" session stop a04br3 || true
+
+      # Keep SSH available after a failed build, but do not report an empty release as a successful run.
+      - name: Report first build failure
+        if: ${{ !cancelled() && steps.first.outcome == 'failure' }}
+        run: |
+          echo "::error::First build failed; see the First build log. The SSH retention period has ended."
+          exit 1
 
       - name: Remove proprietary inputs
         if: always()
