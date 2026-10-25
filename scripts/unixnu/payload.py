@@ -37,6 +37,19 @@ def check_args(arguments):
     return line
 
 
+def kernel_arguments(board, extra, omitted):
+    """Apply explicit overrides and opt-in omissions without editing board sources."""
+    omitted = set(omitted)
+    for name in omitted:
+        if not re.fullmatch(r'[A-Za-z0-9_.\-]+', name):
+            raise Error(f'unsupported omitted kernel argument name: {name}')
+    names = {item.split('=', 1)[0] for item in extra}
+    conflicts = names & omitted
+    if conflicts:
+        raise Error('kernel arguments both supplied and omitted: ' + ', '.join(sorted(conflicts)))
+    return [item for item in board if item.split('=', 1)[0] not in names | omitted] + list(extra)
+
+
 def check_native_root(kernel, arguments):
     """Refuse the known bare-metal AMFI panic before the volume is written."""
     values = {}
@@ -91,9 +104,8 @@ def build(ctx, kernel=None):
     if not kernel.is_file():
         raise Error(f'kernel not found: {kernel}; run "unixnu build kernel" or pass --kernel FILE')
     extra = list(getattr(args, 'kernel_arg', None) or [])
-    # An extra NAME=VALUE replaces the board's argument of the same name.
-    names = {item.split('=', 1)[0] for item in extra}
-    arguments = [item for item in spec.get('kernel_args', []) if item.split('=', 1)[0] not in names] + extra
+    arguments = kernel_arguments(spec.get('kernel_args', []), extra,
+                                 getattr(args, 'omit_kernel_arg', None) or [])
     line = check_args(arguments)
     check_native_root(kernel, arguments)
     owner_trust = getattr(args, 'owner_trust_cache', None)
