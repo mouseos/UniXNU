@@ -845,6 +845,24 @@ if not stamp.exists() or stamp.read_text() != identity:
     directory.mkdir(parents=True, exist_ok=True)
     stamp.write_text(identity)
 PY
+ROOT_TIMING=${XNU_ROOT_TIMING:-0}
+if [[ "$ROOT_TIMING" != 0 && "$ROOT_TIMING" != 1 ]]; then
+  echo 'XNU_ROOT_TIMING must be 0 or 1' >&2
+  exit 1
+fi
+python3 - "$ROOT_TIMING" <<'PYROOT'
+from pathlib import Path
+import sys
+out = Path('build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837')
+stamp = out / '.root-timing-mode'
+mode = sys.argv[1]
+if not stamp.exists() or stamp.read_text() != mode:
+    for relative in ('bsd/DEVELOPMENT/vm_unix.o', 'mach.development.bcm2837.unstripped.noctf'):
+        (out / relative).unlink(missing_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(mode)
+PYROOT
+EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_ROOT_TIMING=$ROOT_TIMING"
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOOT_PROGRESS=$BOOT_PROGRESS"
 make -C .cache/xnu-work "${XNU_BUILD_TARGET:-build}" SDKROOT="${XNU_SDKROOT:-iphoneos}" ARCH_CONFIGS=ARM64 \
   MACHINE_CONFIGS=BCM2837 KERNEL_CONFIGS=DEVELOPMENT \

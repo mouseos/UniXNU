@@ -1,0 +1,97 @@
+diff --git a/bsd/vm/vm_unix.c b/bsd/vm/vm_unix.c
+--- a/bsd/vm/vm_unix.c
++++ b/bsd/vm/vm_unix.c
+@@ -38,6 +38,11 @@
+  * Version 2.0.
+  */
+ #include <vm/vm_options.h>
++#if defined(XNU_ROOT_TIMING) && XNU_ROOT_TIMING
++#include <kern/clock.h>
++#include <pexpert/pexpert.h>
++#endif
++
+ 
+ #include <kern/ecc.h>
+ #include <kern/task.h>
+@@ -2780,6 +2785,57 @@
+  * Subsequent processes will just use the populated shared region without
+  * requiring any further setup.
+  */
++/* Optional cold-start timing. No work/logs in the default build. The weak
++ * provider's counters are global interval totals, not per-process CPU time.
++ */
++#if defined(XNU_ROOT_TIMING) && XNU_ROOT_TIMING
++extern void native_root_timing_snapshot(uint64_t out[6]) __attribute__((weak_import));
++struct native_sr_timing { boolean_t enabled; uint64_t begin, counters[6]; };
++static uint64_t
++native_sr_timing_now(void)
++{
++	uint64_t ns = 0;
++	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
++	return ns;
++}
++static struct native_sr_timing
++native_sr_timing_begin(struct proc *p, uint32_t files, uint32_t mappings)
++{
++	struct native_sr_timing t = {0};
++	unsigned flag = 0;
++	if (!PE_parse_boot_argn("native-root-timing", &flag, sizeof(flag)) || flag != 1) return t;
++	t.enabled = TRUE;
++	if (native_root_timing_snapshot) native_root_timing_snapshot(t.counters);
++	t.begin = native_sr_timing_now();
++	printf("root timing begin pid=%d comm=%s ns=%llu files=%u mappings=%u\n",
++	    proc_getpid(p), p->p_comm, (unsigned long long)t.begin, files, mappings);
++	return t;
++}
++static void
++native_sr_timing_end(struct proc *p, const struct native_sr_timing *t, int error, kern_return_t kr)
++{
++	if (!t->enabled) return;
++	uint64_t elapsed = native_sr_timing_now() - t->begin;
++	uint64_t counters[6] = {0};
++	if (native_root_timing_snapshot) native_root_timing_snapshot(counters);
++	printf("root timing end pid=%d comm=%s elapsed_ns=%llu error=%d kr=%d "
++	    "read_calls=%llu read_requested_bytes=%llu read_ns=%llu "
++	    "verify_calls=%llu verify_bytes=%llu verify_ns=%llu read_total_ns=%llu verify_total_ns=%llu\n",
++	    proc_getpid(p), p->p_comm, (unsigned long long)elapsed, error, kr,
++	    (unsigned long long)(counters[0] - t->counters[0]),
++	    (unsigned long long)(counters[1] - t->counters[1]),
++	    (unsigned long long)(counters[2] - t->counters[2]),
++	    (unsigned long long)(counters[3] - t->counters[3]),
++	    (unsigned long long)(counters[4] - t->counters[4]),
++	    (unsigned long long)(counters[5] - t->counters[5]),
++	    (unsigned long long)counters[2], (unsigned long long)counters[5]);
++}
++#else
++struct native_sr_timing { int unused; };
++#define native_sr_timing_begin(p, files, mappings) ((struct native_sr_timing){0})
++#define native_sr_timing_end(p, t, error, kr) ((void)(t))
++#endif
++
+ static int
+ _shared_region_map_and_slide(
+ 	struct proc                         *p,
+@@ -2793,6 +2849,7 @@
+ 	struct _sr_file_mappings        *sr_file_mappings = NULL;
+ 	struct vnode                    *rdir_vp = NULL;
+ 	struct vm_shared_region         *shared_region = NULL;
++	const struct native_sr_timing timing = native_sr_timing_begin(p, files_count, mappings_count);
+ 
+ 	/*
+ 	 * Get a reference to the current proc's root dir.
+@@ -2815,6 +2872,7 @@
+ 	    &sr_file_mappings, &shared_region, rdir_vp);
+ 	if (error != 0) {
+ 		vnode_put(rdir_vp);
++		native_sr_timing_end(p, &timing, error, kr);
+ 		return error;
+ 	}
+ 
+@@ -2863,6 +2921,7 @@
+ 		(void *)VM_KERNEL_ADDRPERM(current_thread()),
+ 		proc_getpid(p), p->p_comm));
+ 
++	native_sr_timing_end(p, &timing, error, kr);
+ 	return error;
+ }
+ 
