@@ -36,6 +36,7 @@ parser.add_argument('--identifier', help='bundle identifier (default org.unixnu.
 parser.add_argument('--driver-identifier', help='code signing identifier of the driver (default org.unixnu.<driver stem>)')
 parser.add_argument('--out', type=Path)
 parser.add_argument('--skip-bridge', action='store_true', help='use the existing build/native-metal-bridge/ios/libnative_metal_bridge.a')
+parser.add_argument('--portable-sha2', action='store_true', help='build the bridge without requiring CPU SHA2 instructions')
 args = parser.parse_args()
 
 name_ok = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
@@ -61,7 +62,13 @@ bundle = OUT / (args.name + '.bundle')
 bundle.mkdir(parents=True)
 BRIDGE = ROOT / 'build/native-metal-bridge/ios/libnative_metal_bridge.a'
 if not (args.skip_bridge and BRIDGE.is_file()):
-    subprocess.run(['python3', ROOT / 'scripts/build-native-metal-bridge.py', '--target', 'ios'], check=True)
+    subprocess.run(['python3', ROOT / 'scripts/build-native-metal-bridge.py', '--target', 'ios'] +
+                   (['--portable-sha2'] if args.portable_sha2 else []), check=True)
+elif args.portable_sha2:
+    import tomllib
+    manifest = ROOT / 'build/native-metal-bridge/Cargo.toml'
+    if not manifest.is_file() or 'force-soft' not in tomllib.loads(manifest.read_text())['dependencies']['sha2'].get('features', []):
+        raise SystemExit('Existing bridge is not portable SHA2; rebuild without --skip-bridge')
 sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
 base = ['-target', 'arm64-apple-ios17.0', '-isysroot', sdk, '-O2', '-g', '-Wall', '-Wextra', '-Werror', '-fstack-protector-strong']
 includes = ['-I', str(ROOT / 'drivers/NativeMetal')]

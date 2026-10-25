@@ -17,6 +17,7 @@ PIN = json.loads((ROOT / 'scripts/data/gpu-metal-vulkan-inputs.json').read_text(
 SOURCE = ROOT / '.cache/gpu-reference/metal2vulkan'
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--target', choices=['ios', 'host'], default='ios')
+parser.add_argument('--portable-sha2', action='store_true', help='use software SHA2 on CPUs without confirmed SHA2 instructions')
 parser.add_argument('--manifest-only', action='store_true',
                     help='write build/native-metal-bridge/Cargo.toml (patched source, fixtures) and stop before cargo, for `cargo fetch`')
 args = parser.parse_args()
@@ -76,9 +77,9 @@ manifest.write_text('\n'.join([
     'metal2vulkan = { path = ' + json.dumps(str(SOURCE / 'crates/metal2vulkan')) + ', features = ["ash"] }',
     'metal2vulkan-runtime = { path = ' + json.dumps(str(SOURCE / 'crates/metal2vulkan-runtime')) + ' }',
     'libc = "0.2"',
-    # The runtime hashes every shader-cache key and entry; without asm, sha2 0.10 on aarch64 is the portable software rounds, not the
-    # ARMv8 SHA-256 instructions every target CPU has (cpufeatures answers sha2 true on Apple platforms).
-    'sha2 = { version = "0.10", features = ["asm"] }',
+    # Apple cpufeatures assumes SHA2 instructions. Non-Apple boards may select
+    # force-soft explicitly; it takes precedence even if another dependency enables asm.
+    'sha2 = { version = "0.10", features = ' + json.dumps(['force-soft'] if args.portable_sha2 else ['asm']) + ' }',
     '[profile.release]', 'panic = "unwind"', 'debug = 1', '',
 ]))
 if args.manifest_only:
