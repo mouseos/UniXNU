@@ -148,6 +148,7 @@ jobs:
             ${{ steps.rust_cache_key.outputs.compatible_prefix }}
 
       - name: Start the SSH session
+        id: ssh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -273,7 +274,8 @@ jobs:
           key: ${{ steps.rust_cache_key.outputs.key }}
 
       - name: Keep the runner for SSH rebuilds
-        if: ${{ !cancelled() }}
+        # Retain a live SSH session after build failure, not a failed checkout/bootstrap.
+        if: ${{ !cancelled() && steps.ssh.outcome == 'success' }}
         env:
           KEEP_MINUTES: ${{ inputs.keep_minutes }}
         run: |
