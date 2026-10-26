@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: mouseos/UniXNU-a04br3
-          ref: aebd24bcc9dc3cb45a02bf0ac67e3000d0a243a8
+          ref: e561d943d7d1144aeb5c4b1d361c1c624bd73fff
           path: device-schema2
           submodules: recursive
       - uses: actions/setup-python@v5
