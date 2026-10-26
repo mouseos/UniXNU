@@ -12,7 +12,7 @@ source = workflow.read_text()
 step = source.split('      - name: Environment and rebuild script for the SSH session\n', 1)[1]
 body = step.split('        run: |\n', 1)[1].split("          cat > /tmp/a04br3-rebuild.sh <<'SCRIPT'", 1)[0]
 body = '\n'.join(line[10:] for line in body.splitlines())
-pin = 'b0e596f2521c552b3256a581ebd368f05a77fbc0'
+pin = 'b77365072a2447f688d37de5b08e941f801b1298'
 assert re.search(r'device_ref:\n.*\n        required: true\n        default: ' + pin, source)
 assert re.search(r'powervr_metal_roa_color:\n.*\n        type: boolean\n        default: false', source)
 assert "inputs.powervr_metal_roa_color && '1' || '0'" in step

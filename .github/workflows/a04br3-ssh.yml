@@ -11,7 +11,7 @@ on:
       device_ref:
         description: "UniXNU-a04br3 ref (schema2 migration WIP pin; hardware qualification pending)"
         required: true
-        default: b0e596f2521c552b3256a581ebd368f05a77fbc0
+        default: b77365072a2447f688d37de5b08e941f801b1298
       skip_setup:
         description: "Mark Setup done and skip the first-boot data migration in the Data seed (board skip_setup_tool, docs/guide/skip-setup.md), as macos.yml"
         type: boolean
