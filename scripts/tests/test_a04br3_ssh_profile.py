@@ -12,7 +12,7 @@ source = workflow.read_text()
 step = source.split('      - name: Environment and rebuild script for the SSH session\n', 1)[1]
 body = step.split('        run: |\n', 1)[1].split("          cat > /tmp/a04br3-rebuild.sh <<'SCRIPT'", 1)[0]
 body = '\n'.join(line[10:] for line in body.splitlines())
-pin = 'dde2dab72621c02696857abc12b29977cdc447a2'
+pin = 'b0e596f2521c552b3256a581ebd368f05a77fbc0'
 assert re.search(r'device_ref:\n.*\n        required: true\n        default: ' + pin, source)
 assert re.search(r'powervr_metal_roa_color:\n.*\n        type: boolean\n        default: false', source)
 assert "inputs.powervr_metal_roa_color && '1' || '0'" in step
@@ -47,9 +47,27 @@ with tempfile.TemporaryDirectory(prefix='a04br3-profile-') as tmp:
         fields = subprocess.check_output(['/bin/bash', '-c', inspect], env=env).decode().split('\0')
         assert fields[:3] == [pin, mode, str(int(roa))]
         assert fields[3] == ('--kernel-arg sheng-fb-gpu=1' if mode == 'publish' else '')
+# Execute both actual artifact-copy blocks with namespaced CLI output, not the old fixed layout.
+copy_blocks = re.findall(r'^          WORK=.+\n          cp .+\n', source, re.M)
+assert len(copy_blocks) == 2
+with tempfile.TemporaryDirectory(prefix='a04br3-copy-') as tmp:
+    root = Path(tmp)
+    output = root/'custom output/a04br3/ipados-17.7.11-21H461/a04br3'
+    (output/'payload').mkdir(parents=True)
+    (output/'payload/payload.img').write_bytes(b'actual source controller payload fixture')
+    cli = root/'unixnu'
+    cli.write_text("#!/bin/sh\ncat <<'JSON'\n" + __import__('json').dumps({'output':str(output)}) + '\nJSON\n')
+    cli.chmod(0o755)
+    env={**os.environ,'GITHUB_WORKSPACE':str(root),'RUNNER_TEMP':str(root),'tag':'fixture'}
+    for block in copy_blocks:
+        subprocess.run(['bash','-euc', '\n'.join(line[10:] for line in block.splitlines())],cwd=root,env=env,check=True)
+        assert (root/'payload-fixture.img').read_bytes()==(output/'payload/payload.img').read_bytes()
+        (root/'payload-fixture.img').unlink()
+assert '-- sleep 21600' in source and 'timeout-minutes: 360' in source
+assert 'out/a04br3/**/tree/build/m2v-target' in source
 # Parse every embedded shell body with bash without executing it.
 for run in re.findall(r'^        run: \|\n((?:          .*\n|\n)+)', source, re.M):
     script = '\n'.join(line[10:] for line in run.splitlines())
     script = re.sub(r'\$\{\{.*?\}\}', 'fixture', script)
     subprocess.run(['/bin/bash', '-n'], input=script, text=True, check=True)
-print('PASS actual SSH environment generator: 16 profiles, ROA dependencies/default off, publish args, fixed initial/incremental ref, shell syntax')
+print('PASS actual SSH environment generator: 16 profiles, ROA dependencies/default off, publish args, fixed initial/incremental ref, two actual namespaced payload copy blocks, shell syntax')

@@ -38,6 +38,7 @@ jobs:
           python3 scripts/porting-record.py check --device device-schema2
           python3 device-schema2/scripts/tests/check_schema2_prebuild_layout.py
           python3 device-schema2/scripts/tests/test_a04br3_pre_build_seed_reuse.py
+          python3 scripts/tests/test_a04br3_ssh_profile.py
           python3 scripts/tests/test_kernel_output_root.py
           python3 scripts/tests/test_adt_migration_overrides.py
           python3 scripts/tests/test_payload_volume.py

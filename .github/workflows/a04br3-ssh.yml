@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       device_ref:
-        description: "UniXNU-a04br3 ref (RAM600-compatible WIP pin; hardware qualification pending)"
+        description: "UniXNU-a04br3 ref (schema2 migration WIP pin; hardware qualification pending)"
         required: true
-        default: dde2dab72621c02696857abc12b29977cdc447a2
+        default: b0e596f2521c552b3256a581ebd368f05a77fbc0
       skip_setup:
         description: "Mark Setup done and skip the first-boot data migration in the Data seed (board skip_setup_tool, docs/guide/skip-setup.md), as macos.yml"
         type: boolean
@@ -145,7 +145,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            out/a04br3/tree/build/m2v-target
+            out/a04br3/**/tree/build/m2v-target
           key: ${{ steps.rust_cache_key.outputs.key }}
           restore-keys: |
             ${{ steps.rust_cache_key.outputs.source_prefix }}
@@ -164,7 +164,7 @@ jobs:
           echo "$RUNNER_TEMP/upterm-bin" >> "$GITHUB_PATH"
           echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINyHbBUx9HvSf7kVU7pfCNtFBAt4O7o30hpFrBEANRzP a04br3-debug' > "$RUNNER_TEMP/authorized_keys"
           "$RUNNER_TEMP/upterm-bin/upterm" host --server wss://uptermd.upterm.dev --detach --accept --skip-host-key-check --name a04br3 \
-            --authorized-keys "$RUNNER_TEMP/authorized_keys" --force-command "bash --noprofile --norc -i" -o json -- sleep 21000 > "$RUNNER_TEMP/ssh-session.json"
+            --authorized-keys "$RUNNER_TEMP/authorized_keys" --force-command "bash --noprofile --norc -i" -o json -- sleep 21600 > "$RUNNER_TEMP/ssh-session.json"
           python3 - <<'PYTHON'
           import json, os, subprocess
           command = json.load(open(os.environ['RUNNER_TEMP'] + '/ssh-session.json'))['sshCommand']
@@ -226,7 +226,8 @@ jobs:
           ./unixnu build kernel
           ./unixnu build payload $TRUST_CACHE_ARG "$RUNNER_TEMP/trustcache" --data-ramdisk "$RUNNER_TEMP/data.dbr" --unique-chip-id "$UNIQUE_CHIP_ID" $SKIP_SETUP_ARG ${METAL_KERNEL_ARGS[@]+"${METAL_KERNEL_ARGS[@]}"}
           tag="$(git -C device rev-parse --short HEAD)"
-          cp out/a04br3/payload/payload.img "$RUNNER_TEMP/payload-$tag.img"
+          WORK=$(./unixnu status --json -D "$GITHUB_WORKSPACE/device" | python3 -c 'import json,sys;print(json.load(sys.stdin)["output"])')
+          cp "$WORK/payload/payload.img" "$RUNNER_TEMP/payload-$tag.img"
           gh release upload "$RELEASE" "$RUNNER_TEMP/payload-$tag.img" --clobber -R "$GITHUB_REPOSITORY"
           echo "PUBLISHED payload-$tag.img"
           SCRIPT
@@ -254,7 +255,8 @@ jobs:
           ./unixnu build kernel
           ./unixnu build payload $TRUST_CACHE_ARG "$RUNNER_TEMP/trustcache" --data-ramdisk "$RUNNER_TEMP/data.dbr" --unique-chip-id "$UNIQUE_CHIP_ID" $SKIP_SETUP_ARG ${METAL_KERNEL_ARGS[@]+"${METAL_KERNEL_ARGS[@]}"}
           tag="$(git -C device rev-parse --short HEAD)"
-          cp out/a04br3/payload/payload.img "$RUNNER_TEMP/payload-$tag.img"
+          WORK=$(./unixnu status --json -D "$GITHUB_WORKSPACE/device" | python3 -c 'import json,sys;print(json.load(sys.stdin)["output"])')
+          cp "$WORK/payload/payload.img" "$RUNNER_TEMP/payload-$tag.img"
           gh release upload "a04br3-ssh-${{ github.run_id }}" "$RUNNER_TEMP/payload-$tag.img" --clobber
           echo "PUBLISHED payload-$tag.img"
 
@@ -286,7 +288,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            out/a04br3/tree/build/m2v-target
+            out/a04br3/**/tree/build/m2v-target
           key: ${{ steps.rust_cache_key.outputs.key }}
 
       - name: Keep the runner for SSH rebuilds
@@ -310,5 +312,5 @@ jobs:
       - name: Remove proprietary inputs
         if: always()
         run: |
-          rm -rf out/ipsw out/feeds device/.cache/firmware out/*/tree/.cache/firmware "$RUNNER_TEMP"/*.img
+          rm -rf out/ipsw out/feeds device/.cache/firmware out/*/tree/.cache/firmware out/*/*/*/tree/.cache/firmware "$RUNNER_TEMP"/*.img
           rm -f "$RUNNER_TEMP/trustcache" "$RUNNER_TEMP/data.dbr" "$RUNNER_TEMP/a04br3.env"
