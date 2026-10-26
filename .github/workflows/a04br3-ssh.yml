@@ -163,8 +163,10 @@ jobs:
           tar -xzf "$RUNNER_TEMP/upterm.tar.gz" -C "$RUNNER_TEMP/upterm-bin"
           echo "$RUNNER_TEMP/upterm-bin" >> "$GITHUB_PATH"
           echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINyHbBUx9HvSf7kVU7pfCNtFBAt4O7o30hpFrBEANRzP a04br3-debug' > "$RUNNER_TEMP/authorized_keys"
+          # Cover the entire 360-minute job; the keep step stops the host earlier.
+          # A 350-minute host lifetime could expire while the runner still waited.
           "$RUNNER_TEMP/upterm-bin/upterm" host --server wss://uptermd.upterm.dev --detach --accept --skip-host-key-check --name a04br3 \
-            --authorized-keys "$RUNNER_TEMP/authorized_keys" --force-command "bash --noprofile --norc -i" -o json -- sleep 21000 > "$RUNNER_TEMP/ssh-session.json"
+            --authorized-keys "$RUNNER_TEMP/authorized_keys" --force-command "bash --noprofile --norc -i" -o json -- sleep 21600 > "$RUNNER_TEMP/ssh-session.json"
           python3 - <<'PYTHON'
           import json, os, subprocess
           command = json.load(open(os.environ['RUNNER_TEMP'] + '/ssh-session.json'))['sshCommand']
