@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: mouseos/UniXNU-a04br3
-          ref: f6383e1040c2b0af7a948ac9f1cc719e37f6effd
+          ref: ff6650e700769fe7cbdab3ea4e6bb18a3626ec1d
           path: device-schema2
           submodules: recursive
       - uses: actions/setup-python@v5
@@ -36,6 +36,9 @@ jobs:
           python3 device-schema2/scripts/tests/check_schema2_contract.py --unixnu "$PWD" --soc "$SOC_DIR" --out "$RUNNER_TEMP/schema2-contract"
           python3 device-schema2/scripts/tests/check_schema2_build_bindings.py --tree "$RUNNER_TEMP/schema2-contract/a04br3/ipados-17.7.11-21H461/a04br3/tree"
           python3 scripts/porting-record.py check --device device-schema2
+          python3 device-schema2/scripts/tests/check_schema2_prebuild_layout.py
+          python3 device-schema2/scripts/tests/test_a04br3_pre_build_seed_reuse.py
+          python3 scripts/tests/test_kernel_output_root.py
           python3 scripts/tests/test_adt_migration_overrides.py
           python3 scripts/tests/test_payload_volume.py
           python3 scripts/check-unixnu.py
