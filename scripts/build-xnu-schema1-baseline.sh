@@ -33,7 +33,9 @@ if [ ! -x .cache/fakeroot/usr/local/libexec/availability.pl ]; then
 fi
 # Refresh changed canonical patches from the pin, without rewriting unchanged
 # sources or deleting incremental objects/SDKs. Also migrates pre-stamp trees.
-python3 scripts/prepare-xnu-patches.py --root "$ROOT" --revision "$XNU_COMMIT"
+if [ -z "${UNIXNU_PATCH_LIST:-}" ]; then
+  python3 scripts/prepare-xnu-patches.py --root "$ROOT" --revision "$XNU_COMMIT"
+fi
 export XNU_AVAILABILITY_PL=$ROOT/.cache/fakeroot/usr/local/libexec/availability.pl
 python3 scripts/prepare-xnu-source.py
 # The first pass of a new tree (XNU_BOOTSTRAP=1, set by the unixnu driver) only has to leave the compile records and

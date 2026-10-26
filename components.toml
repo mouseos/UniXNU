@@ -243,7 +243,7 @@ dependencies = []
 source_files = ["NativeAES.cpp"]
 runtime_identifiers = ["NativeAES", "NativeAES.cpp"]
 build_stage = "kernel"
-build = ["build-arm-driver.py", "SoftwareAES"]
+build = ["build-arm-driver.py", "NativeAES"]
 outputs = ["build/software-aes/libSoftwareAES.a"]
 legacy_name = "NativeAES"
 legacy_outputs = { "build/native-aes/libNativeAES.a" = "build/software-aes/libSoftwareAES.a" }
@@ -265,7 +265,7 @@ dependencies = []
 source_files = ["NativeKeyStoreEvents.cpp"]
 runtime_identifiers = ["NativeKeyStoreEvents", "NativeKeyStoreEvents.cpp"]
 build_stage = "kernel"
-build = ["build-arm-driver.py", "AppleKeyStoreState"]
+build = ["build-arm-driver.py", "NativeKeyStoreEvents"]
 outputs = ["build/apple-key-store-state/libAppleKeyStoreState.a"]
 legacy_name = "NativeKeyStoreEvents"
 legacy_outputs = { "build/native-keystore-events/libNativeKeyStoreEvents.a" = "build/apple-key-store-state/libAppleKeyStoreState.a" }
@@ -287,7 +287,7 @@ dependencies = []
 source_files = ["NativeRamBlock.cpp"]
 runtime_identifiers = ["NativeRamBlock", "NativeRamBlock.cpp"]
 build_stage = "kernel"
-build = ["build-arm-driver.py", "RamBlock"]
+build = ["build-arm-driver.py", "NativeRamBlock"]
 outputs = ["build/ram-block/libRamBlock.a"]
 legacy_name = "NativeRamBlock"
 legacy_outputs = { "build/native-ram-block/libNativeRamBlock.a" = "build/ram-block/libRamBlock.a" }
@@ -510,3 +510,152 @@ runtime_identifiers = ["ShengPreflight"]
 build_stage = "firmware"
 build = []
 outputs = []
+
+[[component]]
+id = "Mt8167Platform"
+kind = "kit"
+path = "kits/Mt8167Platform"
+repository = "https://github.com/mouseos/UniXNU-mt8167-common.git"
+revision = "545fa1f158afce62e72ead473c951273929eaca8"
+function = "Shared MT8167 resources"
+scope = "soc"
+hardware = ["MediaTek MT8167"]
+os_abi = ["ipados-17.7.11-21H461"]
+board_dependencies = ["device archive plan and board policy"]
+verified_devices = []
+dependencies = []
+build_stage = "embedded"
+build = []
+outputs = []
+runtime_identifiers = ["Mt8167Resources.h"]
+
+[[component]]
+id = "A04BR3Board"
+kind = "kit"
+path = "kits/A04BR3Board"
+repository = "https://github.com/mouseos/UniXNU-a04br3.git"
+revision = "c8fc91a53f7673c797b3fffa06149bae3875f733"
+function = "Board package with original ordered archive builders"
+scope = "board"
+hardware = ["MediaTek MT8167"]
+os_abi = ["ipados-17.7.11-21H461"]
+board_dependencies = ["device archive plan and board policy"]
+verified_devices = []
+dependencies = []
+build_stage = "embedded"
+build = []
+outputs = []
+runtime_identifiers = ["A04BR3Board.cpp", "libA04BR3Board.a"]
+
+[[component]]
+id = "NativeMsdc"
+kind = "driver"
+path = "drivers/NativeMsdc"
+repository = "https://github.com/mouseos/NativeMsdc.git"
+revision = "e718d5d7bde7f6986cd9a7b425c82c50a4dcc3b8"
+function = "MT8167 authenticated MSDC storage"
+scope = "storage"
+hardware = ["MediaTek MT8167"]
+os_abi = ["ipados-17.7.11-21H461"]
+board_dependencies = ["device archive plan and board policy"]
+verified_devices = []
+dependencies = []
+build_stage = "embedded"
+build = []
+outputs = []
+runtime_identifiers = ["NativeMsdc", "NativeMsdcBlock"]
+
+[[component]]
+id = "PowerVRRogue"
+kind = "kit"
+path = "kits/PowerVRRogue"
+repository = "https://github.com/mouseos/UniXNU-a04br3.git"
+revision = "c8fc91a53f7673c797b3fffa06149bae3875f733"
+function = "Embedded PowerVR Rogue GPU with its Vulkan Metal frontend"
+scope = "graphics"
+hardware = ["MediaTek MT8167"]
+os_abi = ["ipados-17.7.11-21H461"]
+board_dependencies = ["device archive plan and board policy"]
+verified_devices = []
+dependencies = []
+build_stage = "embedded"
+build = []
+outputs = []
+runtime_identifiers = ["NativePowerVR", "NativeVulkanMetalPlugin.mm"]
+
+
+[[component]]
+id = "A04BR3VerifiedVirtioBlock"
+kind = "driver"
+path = "drivers/A04BR3VerifiedVirtioBlock"
+repository = "https://github.com/UniXNU/NativeVirtioBlock.git"
+revision = "98909eb9198a4360d7a43be831887cb8b74d814d"
+function = "Retained a04br3 NativeVirtioBlock source and archive contract"
+scope = "board"
+hardware = ["MediaTek MT8167"]
+os_abi = ["ipados-17.7.11-21H461"]
+board_dependencies = ["a04br3 ordered archives"]
+verified_devices = []
+dependencies = []
+build_stage = "kernel"
+build = ["build-arm-driver.py", "NativeVirtioBlock", "--verified-root"]
+outputs = []
+runtime_identifiers = ["NativeVirtioBlock"]
+legacy_name = "NativeVirtioBlock"
+
+
+[[component]]
+id = "NativeHidInput"
+kind = "driver"
+path = "drivers/NativeHidInput"
+repository = "https://github.com/mouseos/ShengHidInput.git"
+revision = "8fc6d05403207795b48940d0514cf594219e71d6"
+function = "Retained a04br3 NativeHidInput source and archive contract"
+scope = "board"
+hardware = ["MediaTek MT8167"]
+os_abi = ["ipados-17.7.11-21H461"]
+board_dependencies = ["a04br3 ordered archives"]
+verified_devices = []
+dependencies = []
+build_stage = "embedded"
+build = []
+outputs = []
+runtime_identifiers = ["NativeHidInput"]
+
+
+[[component]]
+id = "NativeMobileDisplay"
+kind = "driver"
+path = "drivers/NativeMobileDisplay"
+repository = "https://github.com/mouseos/GopFramebuffer.git"
+revision = "279cf9bd8e8b1751dcf991f46176dcc0c63d325d"
+function = "Retained a04br3 NativeMobileDisplay source and archive contract"
+scope = "board"
+hardware = ["MediaTek MT8167"]
+os_abi = ["ipados-17.7.11-21H461"]
+board_dependencies = ["a04br3 ordered archives"]
+verified_devices = []
+dependencies = []
+build_stage = "embedded"
+build = []
+outputs = []
+runtime_identifiers = ["NativeMobileDisplay"]
+
+
+[[component]]
+id = "NativeMetal"
+kind = "driver"
+path = "drivers/NativeMetal"
+repository = "https://github.com/mouseos/NativeMetal.git"
+revision = "f1623c35d29ce0236ea4dfeae1f3c44a096cde89"
+function = "Retained a04br3 NativeMetal source and archive contract"
+scope = "board"
+hardware = ["MediaTek MT8167"]
+os_abi = ["ipados-17.7.11-21H461"]
+board_dependencies = ["a04br3 ordered archives"]
+verified_devices = []
+dependencies = []
+build_stage = "embedded"
+build = []
+outputs = []
+runtime_identifiers = ["NativeMetal"]

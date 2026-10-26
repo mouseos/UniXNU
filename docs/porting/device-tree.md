@@ -298,3 +298,6 @@ The QEMU generator is the smallest complete example. The device page in [Devices
 - [Payload](/concepts/payload)
 - [Device tree matching](/drivers/device-tree-matching)
 - [Bring-up order](/porting/bring-up)
+
+### Explicit migration overrides
+A device may set `device_tree.arm_io_base` and `arm_io_size` together to preserve its existing arm-io window; every exported register must fit. Without them the generator derives the window as before. Typed ADT node tables may list `omit_properties` and `omit_children` to remove inherited OS-profile entries; omitted lists default empty. Use these only for an evidenced board contract. `reg-shift` and `reg-io-width` are exported as u32 UART properties.

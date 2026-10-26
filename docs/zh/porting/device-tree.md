@@ -293,3 +293,6 @@ QEMU 生成器是最小完整示例。真实板级的数值记录在[设备](/zh
 - [启动负载](/zh/concepts/payload)
 - [设备树匹配](/zh/drivers/device-tree-matching)
 - [bring-up 顺序](/zh/porting/bring-up)
+
+### 显式迁移覆盖
+设备可同时设置 `device_tree.arm_io_base` 和 `arm_io_size`，保留原有 arm-io 窗口；所有导出的寄存器必须位于窗口内。缺省时仍自动计算窗口。类型化 ADT 节点可用 `omit_properties` 和 `omit_children` 排除继承的属性或子节点，缺省均为空。UART 的 `reg-shift` 和 `reg-io-width` 以 u32 导出。

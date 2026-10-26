@@ -149,6 +149,9 @@ def build(ctx, modules):
     log('kernel: XNU')
     # Keep the schema-1 archive names and patch contract while format 2 uses catalog paths.
     script_name = 'build-xnu-schema1-baseline.sh' if ctx.schema_version == 1 else 'build-xnu-4k-baseline.sh'
+    script_name = ctx.board.get('kernel', {}).get('build_script', script_name)
+    if not isinstance(script_name, str) or Path(script_name).name != script_name:
+        raise Error('kernel.build_script must name a script in scripts/')
     script = ctx.tree / 'scripts' / script_name
     if not script.is_file():
         raise Error(f'{script} missing')

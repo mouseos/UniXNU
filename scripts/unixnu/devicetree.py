@@ -203,7 +203,7 @@ def arm_io_window(hardware):
 
 
 STRINGS = {'compatible', 'device_type', 'reg-names', 'interrupt-names', 'clock-names', 'method'}
-U32 = {'phandle', 'linux,phandle', '#interrupt-cells', '#iommu-cells', '#clock-cells', 'clock-frequency', 'timebase-frequency'}
+U32 = {'phandle', 'linux,phandle', '#interrupt-cells', '#iommu-cells', '#clock-cells', 'clock-frequency', 'timebase-frequency', 'reg-shift', 'reg-io-width'}
 U64 = {'redistributor-stride'}
 FLAGS = {'interrupt-controller', 'dma-coherent'}
 REFERENCES = {'interrupt-parent': None, 'iommus': '#iommu-cells', 'clocks': '#clock-cells'}
@@ -277,12 +277,24 @@ def typed_properties(table):
     return result
 
 
+def configured_properties(table):
+    properties = typed_properties({kind: value for kind, value in table.items() if kind in PROPERTY_TYPES})
+    omitted = table.get('omit_properties', [])
+    if not isinstance(omitted, list) or any(not isinstance(key, str) for key in omitted):
+        raise Error('ADT omit_properties must be an array of names')
+    return [(key, value) for key, value in properties if key not in omitted]
+
+
 def platform_node(name, table):
     """A configured ADT node: its property tables by type, and any other key as a child node of the same form."""
-    properties = typed_properties({kind: value for kind, value in table.items() if kind in PROPERTY_TYPES})
-    children = [platform_node(child, value) for child, value in table.items() if child not in PROPERTY_TYPES]
+    properties = configured_properties(table)
+    reserved = (*PROPERTY_TYPES, 'omit_properties', 'omit_children')
+    omitted = table.get('omit_children', [])
+    if not isinstance(omitted, list) or any(not isinstance(key, str) for key in omitted):
+        raise Error('ADT omit_children must be an array of names')
+    children = [platform_node(child, value) for child, value in table.items() if child not in reserved and child not in omitted]
     for child, value in table.items():
-        if child not in PROPERTY_TYPES and not isinstance(value, dict):
+        if child not in reserved and not isinstance(value, dict):
             raise Error(f'ADT node {name}: {child} is neither a property type nor a child node')
     return node(name, properties, children)
 
@@ -370,6 +382,20 @@ def generate(dtb, config, *, unique_chip_id=None, data=False, trust=False, addon
     if len(set(names)) != len(names):
         raise Error('Exported ADT hardware names must be unique')
     base, size = arm_io_window(hardware)
+    window = config.get('device_tree', {})
+    if 'arm_io_base' in window or 'arm_io_size' in window:
+        if not all(key in window for key in ('arm_io_base', 'arm_io_size')):
+            raise Error('arm_io_base and arm_io_size must be supplied together')
+        selected_base = int(str(window['arm_io_base']), 0)
+        selected_size = int(str(window['arm_io_size']), 0)
+        if selected_base <= 0 or selected_size <= 0 or selected_base + selected_size > 1 << 64:
+            raise Error('Invalid configured arm-io window')
+        for entry in hardware:
+            for address, length in registers(entry) if 'reg' in entry.properties else []:
+                pa = physical(entry.parent, address, length)
+                if not selected_base <= pa or pa + length > selected_base + selected_size:
+                    raise Error('Configured arm-io window does not contain exported registers')
+        base, size = selected_base, selected_size
     children.append(node('arm-io', [('device_type', b'arm-io\0'), ('#address-cells', struct.pack('<I', 2)),
                          ('#size-cells', struct.pack('<I', 2)), ('ranges', struct.pack('<QQQ', 0, base, size))],
                          [node(name, hardware_properties(entry, handles, base)) for name, entry in zip(names, hardware)]))
@@ -378,7 +404,7 @@ def generate(dtb, config, *, unique_chip_id=None, data=False, trust=False, addon
             children.append(platform_node(name, platform.get(name, {})))
     # A configured root 'compatible' goes before the hardware DTS's own entries: an OS identity's board name comes first (the OS
     # reads the first entry as the hardware model) and the board's compatible strings stay matchable after it.
-    configured = dict(typed_properties(platform.get('root', {})))
+    configured = dict(configured_properties(platform.get('root', {})))
     compatible = configured.pop('compatible', b'') + root.properties['compatible']
     root_properties = [('compatible', compatible), ('#address-cells', struct.pack('<I', 2)),
                        ('#size-cells', struct.pack('<I', 2)), *configured.items()]

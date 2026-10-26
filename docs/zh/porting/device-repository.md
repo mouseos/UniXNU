@@ -477,3 +477,5 @@ entry = "<entry id>"
 
 板级驱动子模块归属设备仓库。sheng 在设备仓库固定 ShengUfs、ShengHidInput、
 ShengNovatekTouch 和 ShengPreflight。
+
+迁移期间可用 `kernel.build_script` 指定组装后 `scripts/` 下的文件名，缺省入口不变。指定脚本必须遵守解析器提供的 `UNIXNU_PATCH_LIST`，不得重新混入其他补丁。

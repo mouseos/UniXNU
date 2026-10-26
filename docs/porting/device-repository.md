@@ -500,3 +500,5 @@ for fields, status levels and publication.
 
 Board driver submodules belong to the device repository. sheng pins ShengUfs,
 ShengHidInput, ShengNovatekTouch and ShengPreflight there.
+
+A transitional device may set `kernel.build_script` to a filename under the assembled `scripts/` directory. The default kernel entry point is unchanged; the selected script must respect the resolver's `UNIXNU_PATCH_LIST`.
