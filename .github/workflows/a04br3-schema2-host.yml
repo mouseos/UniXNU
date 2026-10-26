@@ -1,0 +1,48 @@
+name: A04BR3 schema2 host contract
+on:
+  push:
+    branches: [migration/f85-schema2]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/checkout@v4
+        with:
+          repository: mouseos/UniXNU-a04br3
+          ref: 1f75e61e205671f0d89c546fa5241ef03f965895
+          path: device-schema2
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install host-only tools
+        run: sudo apt-get update && sudo apt-get install -y device-tree-compiler mtools
+      - name: Resolve pinned sources and assemble the tree
+        run: |
+          ./unixnu defconfig a04br3_defconfig -D "$PWD/device-schema2" --out "$RUNNER_TEMP/schema2"
+          ./unixnu fetch mt8167 -D "$PWD/device-schema2" --out "$RUNNER_TEMP/schema2"
+          ./unixnu tree -D "$PWD/device-schema2" --out "$RUNNER_TEMP/schema2"
+          ./unixnu status --json -D "$PWD/device-schema2" --out "$RUNNER_TEMP/schema2" > "$RUNNER_TEMP/schema2-status.json"
+      - name: Check actual archives, DTS and ADT contracts
+        run: |
+          SOC_DIR=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["profiles"]["soc"])' "$RUNNER_TEMP/schema2-status.json")
+          test "$(git -C "$SOC_DIR" rev-parse HEAD)" = 545fa1f158afce62e72ead473c951273929eaca8
+          python3 device-schema2/scripts/tests/check_schema2_contract.py --unixnu "$PWD" --soc "$SOC_DIR" --out "$RUNNER_TEMP/schema2-contract"
+          python3 scripts/porting-record.py check --device device-schema2
+          python3 scripts/tests/test_adt_migration_overrides.py
+          python3 scripts/tests/test_payload_volume.py
+          python3 scripts/check-unixnu.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: schema2-host-contract
+          path: |
+            ${{ runner.temp }}/schema2-status.json
+            ${{ runner.temp }}/schema2-contract/*.json
+            ${{ runner.temp }}/schema2-contract/a04br3/ipados-17.7.11-21H461/a04br3/device-tree/hardware.dtb
