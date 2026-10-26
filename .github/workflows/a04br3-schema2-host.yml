@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: mouseos/UniXNU-a04br3
-          ref: 1f75e61e205671f0d89c546fa5241ef03f965895
+          ref: f6383e1040c2b0af7a948ac9f1cc719e37f6effd
           path: device-schema2
           submodules: recursive
       - uses: actions/setup-python@v5
@@ -34,6 +34,7 @@ jobs:
           SOC_DIR=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["profiles"]["soc"])' "$RUNNER_TEMP/schema2-status.json")
           test "$(git -C "$SOC_DIR" rev-parse HEAD)" = 545fa1f158afce62e72ead473c951273929eaca8
           python3 device-schema2/scripts/tests/check_schema2_contract.py --unixnu "$PWD" --soc "$SOC_DIR" --out "$RUNNER_TEMP/schema2-contract"
+          python3 device-schema2/scripts/tests/check_schema2_build_bindings.py --tree "$RUNNER_TEMP/schema2-contract/a04br3/ipados-17.7.11-21H461/a04br3/tree"
           python3 scripts/porting-record.py check --device device-schema2
           python3 scripts/tests/test_adt_migration_overrides.py
           python3 scripts/tests/test_payload_volume.py
