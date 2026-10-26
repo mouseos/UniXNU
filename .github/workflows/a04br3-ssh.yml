@@ -207,6 +207,11 @@ jobs:
           git -C device fetch -q origin
           git -C device checkout -q --detach "${1:-origin/main}"
           ./unixnu tree -D "$GITHUB_WORKSPACE/device"
+          # User-space probes and their owner trust cache are inputs too. Reuse the
+          # existing dependency builds, but stage the newly checked-out sources.
+          export DEVICE_DIR="$GITHUB_WORKSPACE/device"
+          A04BR3_REUSE_DATA_SEED=1 bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"
+          source "$RUNNER_TEMP/a04br3-data.env"
           ./unixnu build kernel
           ./unixnu build payload $TRUST_CACHE_ARG "$RUNNER_TEMP/trustcache" --data-ramdisk "$RUNNER_TEMP/data.dbr" --unique-chip-id "$UNIQUE_CHIP_ID" $SKIP_SETUP_ARG ${METAL_KERNEL_ARGS[@]+"${METAL_KERNEL_ARGS[@]}"}
           tag="$(git -C device rev-parse --short HEAD)"
