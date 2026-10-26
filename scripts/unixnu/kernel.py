@@ -156,6 +156,8 @@ def build(ctx, modules):
     if not script.is_file():
         raise Error(f'{script} missing')
     env = dict(os.environ)
+    # Archive builders need the resolved cache root even when --out overrides the environment.
+    env['UNIXNU_OUT'] = str(ctx.out_root)
     if platform.system() == 'Linux':
         for name in ('git', 'make', 'cmake', 'ninja', 'unifdef'):
             tool(name, 'run sudo scripts/linux/setup-toolchain.py')

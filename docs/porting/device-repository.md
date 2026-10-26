@@ -502,3 +502,5 @@ Board driver submodules belong to the device repository. sheng pins ShengUfs,
 ShengHidInput, ShengNovatekTouch and ShengPreflight there.
 
 A transitional device may set `kernel.build_script` to a filename under the assembled `scripts/` directory. The default kernel entry point is unchanged; the selected script must respect the resolver's `UNIXNU_PATCH_LIST`.
+
+Archive builders receive `UNIXNU_OUT` set to the resolved output root, including when `--out` overrides an inherited environment value. Cache inputs such as `ipsw/<build>/kernelcache.decompressed` live under that root, not under the schema2 configuration namespace.
