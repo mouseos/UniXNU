@@ -159,3 +159,31 @@ python3 scripts/check-darwinboot-memory-map-build.py --edk2-source /absolute/pat
 
 The second check verifies the checkout revision against the official `edk2`
 source pin in `feeds.toml` before exercising the real DSC parser.
+
+To enable the diagnostic for one build without changing board defaults, the
+existing firmware-defines dictionary can be overridden in the build context.
+Run this from the UniXNU root after selecting the reviewed source pins (adjust
+only checkout paths / the existing output directory as needed):
+
+```sh
+python3 - <<'PYTHON'
+import sys
+sys.path.insert(0, "scripts")
+from unixnu.cli import parser, cmd_build
+from unixnu.config import Context
+args = parser().parse_args([
+    "build", "firmware", "-D", "../UniXNU-a04br3",
+    "--uefi", "../uefi-a04br3", "--edk2", "out/feeds/mu_basecore-89034cbb",
+    "--target", "DEBUG", "-j", "4",
+])
+ctx = Context(args)
+ctx.board["firmware"].setdefault("defines", {})["DARWINBOOT_MEMORY_MAP_DIAG"] = "1"
+cmd_build(ctx)
+PYTHON
+```
+
+This uses the official firmware preparation/build path and only changes the
+in-memory dictionary for that invocation; it does not edit `board.toml`, run a
+kernel build, or write/boot the device. The normal CLI has no separate
+`--firmware-define` option. Verify the build log contains
+`-D DARWINBOOT_MEMORY_MAP_DIAG=1` before using the resulting firmware.
