@@ -21,7 +21,7 @@
 	url = https://github.com/UniXNU/NativeGeniSpi.git
 [submodule "drivers/NativeHidInput"]
 	path = drivers/NativeHidInput
-	url = https://github.com/UniXNU/NativeHidInput.git
+	url = https://github.com/mouseos/ShengHidInput.git
 [submodule "drivers/NativeKeyStoreEvents"]
 	path = drivers/NativeKeyStoreEvents
 	url = https://github.com/UniXNU/NativeKeyStoreEvents.git
