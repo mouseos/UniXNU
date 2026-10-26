@@ -61,6 +61,7 @@ A device repository has four configuration files: `board.toml`, `configs/<name>_
 | `kernelcache` | string | Optional path to a local kernelcache |
 | `kernelcache_sha256` | string | Expected kernelcache hash |
 | `extra_args` | array | Extra prelink arguments |
+| `archive_preflight` | array | Optional build-tree scripts run before bootstrap/archive compilation when archive building is enabled; default empty. Receive the actual profile as `UNIXNU_PRELINK_SPEC` JSON and resolved, hash-checked cache path as `UNIXNU_PRELINK_KERNELCACHE`. Failure aborts the build. |
 
 ### [firmware]
 

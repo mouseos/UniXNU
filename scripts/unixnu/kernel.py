@@ -1,5 +1,6 @@
 """XNU kernel: build from the patched Apple source, then prelink against the original kernelcache."""
 import os
+import json
 import shlex
 from pathlib import Path
 
@@ -68,6 +69,37 @@ def build_archives(ctx, env):
             raise Error(f'{key}: {value} not found; no builder makes it, supply the archive')
 
 
+def prelink_cache(ctx, spec):
+    """Resolve/check the same original cache for optional archive guards and prelink."""
+    cache = ctx.option('kernelcache', 'UNIXNU_KERNELCACHE') or (expand(ctx.tree / spec['kernelcache']) if spec.get('kernelcache') else None)
+    if not cache:
+        # Not given: take it from the IPSW (--ipsw PATH_OR_URL, or the url of board.toml [ipsw]).
+        cache = ipsw.kernelcache(ctx, ipsw.Ipsw(ctx))
+    if not cache.is_file():
+        raise Error(f'kernelcache not found: {cache}')
+    wanted = spec.get('kernelcache_sha256')
+    if wanted and sha256_file(cache) != wanted:
+        raise Error(f'{cache} does not match the kernelcache this board was qualified against (sha256 {wanted})')
+    return cache
+
+
+def archive_preflight(ctx, env):
+    """Optional board guards, before bootstrap/archive compilation; absent means no work."""
+    spec = ctx.board.get('kernel', {}).get('prelink') or {}
+    guards = spec.get('archive_preflight', [])
+    if not guards or not ctx.need_config().get('XNU_BUILD_ARCHIVES'):
+        return
+    cache = prelink_cache(ctx, spec)
+    env['UNIXNU_PRELINK_SPEC'] = json.dumps(spec)
+    env['UNIXNU_PRELINK_KERNELCACHE'] = str(cache.resolve())
+    for index, guard in enumerate(guards):
+        script = ctx.tree / 'scripts' / guard
+        if not script.is_file():
+            raise Error(f'archive preflight missing: {script}')
+        run(['python3', script], cwd=ctx.tree, env=env,
+            log_file=ctx.logs / f'archive-preflight-{index:02d}.log')
+
+
 def build(ctx, modules):
     log('kernel: XNU')
     for name in ('git', 'make', 'clang', 'cmake', 'ninja', 'unifdef'):
@@ -87,6 +119,7 @@ def build(ctx, modules):
         env['UNIXNU_PRELINK_KERNELCACHE_SHA256'] = prelink_spec['kernelcache_sha256']
     if prelink_spec.get('slide') is not None:
         env['UNIXNU_PRELINK_SLIDE'] = str(prelink_spec['slide'])
+    archive_preflight(ctx, env)
     record = ctx.tree / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/startup.o.json'
     if not record.is_file():
         # The archive builders and the boot progress layer read compile records of the XNU build, which only an earlier
@@ -115,15 +148,7 @@ def prelink(ctx):
     spec = ctx.board.get('kernel', {}).get('prelink')
     if not spec:
         raise Error('board.toml has no [kernel.prelink]')
-    cache = ctx.option('kernelcache', 'UNIXNU_KERNELCACHE') or (expand(ctx.tree / spec['kernelcache']) if spec.get('kernelcache') else None)
-    if not cache:
-        # Not given: take it from the IPSW (--ipsw PATH_OR_URL, or the url of board.toml [ipsw]).
-        cache = ipsw.kernelcache(ctx, ipsw.Ipsw(ctx))
-    if not cache.is_file():
-        raise Error(f'kernelcache not found: {cache}')
-    wanted = spec.get('kernelcache_sha256')
-    if wanted and sha256_file(cache) != wanted:
-        raise Error(f'{cache} does not match the kernelcache this board was qualified against (sha256 {wanted})')
+    cache = prelink_cache(ctx, spec)
     kernel = ctx.tree / spec['kernel']
     if not kernel.is_file():
         raise Error(f'{kernel} not found; run "unixnu build kernel" first')
