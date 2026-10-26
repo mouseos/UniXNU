@@ -1,0 +1,510 @@
+diff --git a/bsd/vm/vm_unix.c b/bsd/vm/vm_unix.c
+--- a/bsd/vm/vm_unix.c
++++ b/bsd/vm/vm_unix.c
+@@ -38,6 +38,11 @@
+  * Version 2.0.
+  */
+ #include <vm/vm_options.h>
++#if defined(XNU_ROOT_TIMING) && XNU_ROOT_TIMING
++#include <kern/clock.h>
++#include <pexpert/pexpert.h>
++#endif
++
+ 
+ #include <kern/ecc.h>
+ #include <kern/task.h>
+@@ -2707,6 +2712,59 @@
+  * Subsequent processes will just use the populated shared region without
+  * requiring any further setup.
+  */
++/* Optional cold-start timing. No work/logs in the default build. The weak
++ * provider's counters are global interval totals, not per-process CPU time.
++ */
++#if defined(XNU_ROOT_TIMING) && XNU_ROOT_TIMING
++extern void native_root_signature_timing_report(void) __attribute__((weak_import));
++extern void native_root_timing_snapshot(uint64_t out[6]) __attribute__((weak_import));
++struct native_sr_timing { boolean_t enabled; uint64_t begin, counters[6]; };
++static uint64_t
++native_sr_timing_now(void)
++{
++	uint64_t ns = 0;
++	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
++	return ns;
++}
++static struct native_sr_timing
++native_sr_timing_begin(struct proc *p, uint32_t files, uint32_t mappings)
++{
++	struct native_sr_timing t = {0};
++	unsigned flag = 0;
++	if (!PE_parse_boot_argn("native-root-timing", &flag, sizeof(flag)) || flag != 1) return t;
++	if (native_root_signature_timing_report) native_root_signature_timing_report();
++	t.enabled = TRUE;
++	if (native_root_timing_snapshot) native_root_timing_snapshot(t.counters);
++	t.begin = native_sr_timing_now();
++	printf("root timing begin pid=%d comm=%s ns=%llu files=%u mappings=%u\n",
++	    proc_getpid(p), p->p_comm, (unsigned long long)t.begin, files, mappings);
++	return t;
++}
++static void
++native_sr_timing_end(struct proc *p, const struct native_sr_timing *t, int error, kern_return_t kr)
++{
++	if (!t->enabled) return;
++	uint64_t elapsed = native_sr_timing_now() - t->begin;
++	uint64_t counters[6] = {0};
++	if (native_root_timing_snapshot) native_root_timing_snapshot(counters);
++	printf("root timing end pid=%d comm=%s elapsed_ns=%llu error=%d kr=%d "
++	    "read_calls=%llu read_requested_bytes=%llu read_ns=%llu "
++	    "verify_calls=%llu verify_bytes=%llu verify_ns=%llu read_total_ns=%llu verify_total_ns=%llu\n",
++	    proc_getpid(p), p->p_comm, (unsigned long long)elapsed, error, kr,
++	    (unsigned long long)(counters[0] - t->counters[0]),
++	    (unsigned long long)(counters[1] - t->counters[1]),
++	    (unsigned long long)(counters[2] - t->counters[2]),
++	    (unsigned long long)(counters[3] - t->counters[3]),
++	    (unsigned long long)(counters[4] - t->counters[4]),
++	    (unsigned long long)(counters[5] - t->counters[5]),
++	    (unsigned long long)counters[2], (unsigned long long)counters[5]);
++}
++#else
++struct native_sr_timing { int unused; };
++#define native_sr_timing_begin(p, files, mappings) ((struct native_sr_timing){0})
++#define native_sr_timing_end(p, t, error, kr) ((void)(t))
++#endif
++
+ static int
+ _shared_region_map_and_slide(
+ 	struct proc                         *p,
+@@ -2720,6 +2778,7 @@
+ 	struct _sr_file_mappings        *sr_file_mappings = NULL;
+ 	struct vnode                    *rdir_vp = NULL;
+ 	struct vm_shared_region         *shared_region = NULL;
++	const struct native_sr_timing timing = native_sr_timing_begin(p, files_count, mappings_count);
+ 
+ 	/*
+ 	 * Get a reference to the current proc's root dir.
+@@ -2742,6 +2801,7 @@
+ 	    &sr_file_mappings, &shared_region, rdir_vp);
+ 	if (error != 0) {
+ 		vnode_put(rdir_vp);
++		native_sr_timing_end(p, &timing, error, kr);
+ 		return error;
+ 	}
+ 
+@@ -2790,6 +2850,7 @@
+ 		(void *)VM_KERNEL_ADDRPERM(current_thread()),
+ 		proc_getpid(p), p->p_comm));
+ 
++	native_sr_timing_end(p, &timing, error, kr);
+ 	return error;
+ }
+ 
+diff --git a/bsd/kern/kern_descrip.c b/bsd/kern/kern_descrip.c
+--- a/bsd/kern/kern_descrip.c
++++ b/bsd/kern/kern_descrip.c
+@@ -2740,9 +2740,204 @@
+ 	return sys_fcntl_outdrop(p, fd, fp, vp, error);
+ }
+ 
++/* Optional signature-case wall time, including final fd cleanup. Counters are
++ * cumulative per process unique ID (first four processes); nested stages must not be summed with
++ * whole_ns. No UART work on the signature path. */
++#if defined(XNU_ROOT_TIMING) && XNU_ROOT_TIMING
++#include <kern/clock.h>
++#include <pexpert/pexpert.h>
++struct native_sig_slot { int pid; uint64_t uniqueid, count, bytes, whole_ns, errors;
++    uint64_t read_count, read_bytes, read_ns, add_count, add_bytes, add_ns;
++    uint64_t blob_count, blob_errors, init_count, init_ns, pre_ns, mac_count, mac_ns, post_ns;
++    uint64_t vnode_cross, vnode_dropped, duplicate_vnode, duplicate_vid, duplicate_base, duplicate_peer;
++    uint64_t prep_count, prep_bytes, prep_ns, prep_errors, prep_reuse;
++    uint64_t hash_read_count, hash_read_bytes, hash_read_ns, hash_original_ns, hash_derived_ns, hash_batched; };
++static struct native_sig_slot native_sig_slots[4];
++static unsigned native_sig_reports;
++struct native_sig_timing { struct native_sig_slot *slot; uint64_t begin, bytes;
++    uint64_t read_count, read_bytes, read_ns, add_count, add_bytes, add_ns; };
++static uint64_t
++native_sig_now(void)
++{
++	uint64_t ns = 0;
++	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
++	return ns;
++}
++static struct native_sig_slot *
++native_sig_slot_get(int pid, uint64_t uniqueid)
++{
++	if (pid <= 0 || uniqueid == 0) return NULL;
++	for (unsigned i = 0; i < 4; i++) {
++		uint64_t expected = 0;
++		if (__atomic_load_n(&native_sig_slots[i].uniqueid, __ATOMIC_RELAXED) == uniqueid ||
++		    __atomic_compare_exchange_n(&native_sig_slots[i].uniqueid, &expected, uniqueid, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED) || expected == uniqueid) {
++			__atomic_store_n(&native_sig_slots[i].pid, pid, __ATOMIC_RELAXED);
++			return &native_sig_slots[i];
++		}
++	}
++	return NULL;
++}
++static void
++native_sig_begin(struct native_sig_timing *t, proc_t p, int cmd)
++{
++	unsigned flag = 0;
++	if (cmd == F_ADDSIGS || !PE_parse_boot_argn("native-root-timing", &flag, sizeof(flag)) || flag != 1) return;
++	t->slot = native_sig_slot_get(proc_getpid(p), proc_uniqueid(p));
++	if (t->slot) t->begin = native_sig_now();
++}
++/* Values only, never retained vnode references. The bounded table is observed
++ * with a nonblocking try-lock after the original blob-add cleanup. Contention
++ * or exhaustion drops only the duplicate sample, never timing counters. */
++struct native_sig_vnode { uintptr_t address; uint32_t vid; int64_t base;
++    uint64_t first_uid, second_uid; unsigned seen; };
++static struct native_sig_vnode native_sig_vnodes[64];
++static unsigned native_sig_vnodes_busy;
++void native_root_blob_timing_record(int, uint64_t, uintptr_t, uint32_t, int64_t,
++    const uint64_t [4], unsigned, int);
++void
++native_root_blob_timing_record(int pid, uint64_t uid, uintptr_t address, uint32_t vid,
++    int64_t base, const uint64_t ns[4], unsigned mac_count, int error)
++{
++	struct native_sig_slot *s = native_sig_slot_get(pid, uid);
++	if (!s) return;
++#define BLOB_ACC(field, n) __atomic_fetch_add(&s->field, (n), __ATOMIC_RELAXED)
++	BLOB_ACC(blob_count, 1); BLOB_ACC(blob_errors, error != 0);
++	BLOB_ACC(init_count, 1); BLOB_ACC(init_ns, ns[0]); BLOB_ACC(pre_ns, ns[1]);
++	BLOB_ACC(mac_count, mac_count); BLOB_ACC(mac_ns, ns[2]); BLOB_ACC(post_ns, ns[3]);
++	unsigned expected = 0;
++	if (!__atomic_compare_exchange_n(&native_sig_vnodes_busy, &expected, 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
++		BLOB_ACC(vnode_dropped, 1);
++		return;
++	}
++	unsigned bit = 1U << (unsigned)(s - native_sig_slots);
++	unsigned i;
++	for (i = 0; i < 64; i++) {
++		struct native_sig_vnode *v = &native_sig_vnodes[i];
++		if (!v->seen) {
++			v->address = address; v->vid = vid; v->base = base; v->first_uid = uid; v->seen = bit;
++			break;
++		}
++		if (v->address != address || v->vid != vid || v->base != base) continue;
++		if (v->seen & ~bit) {
++			if (uid != v->first_uid && !v->second_uid) v->second_uid = uid;
++			BLOB_ACC(vnode_cross, 1);
++			__atomic_store_n(&s->duplicate_vnode, address, __ATOMIC_RELAXED);
++			__atomic_store_n(&s->duplicate_vid, vid, __ATOMIC_RELAXED);
++			__atomic_store_n(&s->duplicate_base, (uint64_t)base, __ATOMIC_RELAXED);
++			__atomic_store_n(&s->duplicate_peer, uid == v->first_uid ? v->second_uid : v->first_uid, __ATOMIC_RELAXED);
++		}
++		v->seen |= bit;
++		break;
++	}
++	if (i == 64) BLOB_ACC(vnode_dropped, 1);
++	__atomic_store_n(&native_sig_vnodes_busy, 0, __ATOMIC_RELEASE);
++#undef BLOB_ACC
++}
++void native_root_prepare_timing_record(int, uint64_t, uint64_t, uint64_t, int, int);
++void
++native_root_prepare_timing_record(int pid, uint64_t uid, uint64_t bytes, uint64_t ns, int error, int reused)
++{
++	struct native_sig_slot *s = native_sig_slot_get(pid, uid);
++	if (!s) return;
++	if (reused) { __atomic_fetch_add(&s->prep_reuse, 1, __ATOMIC_RELAXED); return; }
++	__atomic_fetch_add(&s->prep_count, 1, __ATOMIC_RELAXED);
++	__atomic_fetch_add(&s->prep_bytes, bytes, __ATOMIC_RELAXED);
++	__atomic_fetch_add(&s->prep_ns, ns, __ATOMIC_RELAXED);
++	__atomic_fetch_add(&s->prep_errors, error != 0, __ATOMIC_RELAXED);
++}
++void native_root_hash_timing_record(int, uint64_t, const uint64_t [5], int);
++void
++native_root_hash_timing_record(int pid, uint64_t uid, const uint64_t metrics[5], int batched)
++{
++	struct native_sig_slot *s = native_sig_slot_get(pid, uid);
++	if (!s) return;
++	__atomic_fetch_add(&s->hash_read_ns, metrics[0], __ATOMIC_RELAXED);
++	__atomic_fetch_add(&s->hash_original_ns, metrics[1], __ATOMIC_RELAXED);
++	__atomic_fetch_add(&s->hash_derived_ns, metrics[2], __ATOMIC_RELAXED);
++	__atomic_fetch_add(&s->hash_read_count, metrics[3], __ATOMIC_RELAXED);
++	__atomic_fetch_add(&s->hash_read_bytes, metrics[4], __ATOMIC_RELAXED);
++	__atomic_fetch_add(&s->hash_batched, batched != 0, __ATOMIC_RELAXED);
++}
++static uint64_t
++native_sig_stage_begin(const struct native_sig_timing *t)
++{
++	return t->slot ? native_sig_now() : 0;
++}
++static void
++native_sig_stage_end(struct native_sig_timing *t, uint64_t start, uint64_t bytes, int add)
++{
++	if (!t->slot) return;
++	uint64_t elapsed = native_sig_now() - start;
++	if (add) { t->add_count++; t->add_bytes += bytes; t->add_ns += elapsed; }
++	else { t->read_count++; t->read_bytes += bytes; t->read_ns += elapsed; }
++}
++static int
++native_sig_finish(struct native_sig_timing *t, int error)
++{
++	if (!t->slot) return error;
++#define SIG_ACC(field, value) __atomic_fetch_add(&t->slot->field, (value), __ATOMIC_RELAXED)
++	SIG_ACC(whole_ns, native_sig_now() - t->begin);
++	SIG_ACC(bytes, t->bytes);
++	SIG_ACC(errors, error != 0);
++	SIG_ACC(read_count, t->read_count); SIG_ACC(read_bytes, t->read_bytes); SIG_ACC(read_ns, t->read_ns);
++	SIG_ACC(add_count, t->add_count); SIG_ACC(add_bytes, t->add_bytes); SIG_ACC(add_ns, t->add_ns);
++	SIG_ACC(count, 1);
++#undef SIG_ACC
++	return error;
++}
++/* Called only by the gated shared-region begin, at most twice per boot.
++ * Relaxed snapshots can overlap ongoing calls; these are not CPU-exclusive times. */
++void native_root_signature_timing_report(void);
++void
++native_root_signature_timing_report(void)
++{
++	unsigned n = __atomic_load_n(&native_sig_reports, __ATOMIC_RELAXED);
++	do { if (n >= 2) return; }
++	while (!__atomic_compare_exchange_n(&native_sig_reports, &n, n + 1, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED));
++	for (unsigned i = 0; i < 4; i++) {
++		struct native_sig_slot *s = &native_sig_slots[i];
++		int pid = __atomic_load_n(&s->pid, __ATOMIC_RELAXED);
++		if (!pid) continue;
++#define SIG_GET(field) ((unsigned long long)__atomic_load_n(&s->field, __ATOMIC_RELAXED))
++		/* Each newline-terminated record is <=200 bytes even at full-width
++		 * counter values, below the 255-byte console print buffer limit.
++		 * q identifies the two concurrent reports; no diagnostic lock held. */
++		printf("RST sig q=%u p=%d u=%llu c=%llu b=%llu w=%llu e=%llu rc=%llu rn=%llu\n",
++		    n + 1, pid, SIG_GET(uniqueid), SIG_GET(count), SIG_GET(bytes), SIG_GET(whole_ns),
++		    SIG_GET(errors), SIG_GET(read_count), SIG_GET(read_ns));
++		printf("RST add q=%u p=%d u=%llu rb=%llu ac=%llu ab=%llu an=%llu bc=%llu be=%llu\n",
++		    n + 1, pid, SIG_GET(uniqueid), SIG_GET(read_bytes), SIG_GET(add_count), SIG_GET(add_bytes),
++		    SIG_GET(add_ns), SIG_GET(blob_count), SIG_GET(blob_errors));
++		printf("RST phase q=%u p=%d u=%llu ic=%llu in=%llu pre=%llu mc=%llu mn=%llu post=%llu\n",
++		    n + 1, pid, SIG_GET(uniqueid), SIG_GET(init_count), SIG_GET(init_ns), SIG_GET(pre_ns),
++		    SIG_GET(mac_count), SIG_GET(mac_ns), SIG_GET(post_ns));
++		printf("RST vnode q=%u p=%d u=%llu cross=%llu drop=%llu a=%llx v=%llu o=%llx peer=%llu\n",
++		    n + 1, pid, SIG_GET(uniqueid), SIG_GET(vnode_cross), SIG_GET(vnode_dropped),
++		    SIG_GET(duplicate_vnode), SIG_GET(duplicate_vid), SIG_GET(duplicate_base), SIG_GET(duplicate_peer));
++		printf("RST prep q=%u p=%d u=%llu pc=%llu pb=%llu pn=%llu pe=%llu hit=%llu\n",
++		    n + 1, pid, SIG_GET(uniqueid), SIG_GET(prep_count), SIG_GET(prep_bytes),
++		    SIG_GET(prep_ns), SIG_GET(prep_errors), SIG_GET(prep_reuse));
++		printf("RST hash q=%u p=%d u=%llu rc=%llu rb=%llu rn=%llu on=%llu dn=%llu bat=%llu\n",
++		    n + 1, pid, SIG_GET(uniqueid), SIG_GET(hash_read_count), SIG_GET(hash_read_bytes),
++		    SIG_GET(hash_read_ns), SIG_GET(hash_original_ns), SIG_GET(hash_derived_ns), SIG_GET(hash_batched));
++#undef SIG_GET
++	}
++}
++#define native_sig_bytes(t, n) ((t)->bytes = (n))
++#else
++struct native_sig_timing { int unused; };
++#define native_sig_begin(t, p, cmd) ((void)(t))
++#define native_sig_stage_begin(t) ((void)(t), 0ULL)
++#define native_sig_stage_end(t, start, bytes, add) ((void)(t), (void)(start))
++#define native_sig_bytes(t, n) ((void)(t))
++#define native_sig_finish(t, error) ((void)(t), (error))
++#endif
++
+ int
+ sys_fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
+ {
++	struct native_sig_timing sig_timing = {0};
++	uint64_t sig_stage = 0;
+ 	int fd = uap->fd;
+ 	int cmd = uap->cmd;
+ 	struct fileproc *fp;
+@@ -3908,6 +4103,8 @@
+ 		    offsetof(struct user_fsignatures, fs_cdhash /* first output element */) :
+ 		    offsetof(struct user_fsignatures, fs_fsignatures_size /* compat */));
+ 
++		native_sig_begin(&sig_timing, p, cmd);
++
+ 		if (fp->f_type != DTYPE_VNODE) {
+ 			error = EBADF;
+ 			goto out;
+@@ -3954,6 +4151,7 @@
+ 		/*
+ 		 * First check if we have something loaded a this offset
+ 		 */
++		native_sig_bytes(&sig_timing, fs.fs_blob_size);
+ 		blob = ubc_cs_blob_get(vp, CPU_TYPE_ANY, CPU_SUBTYPE_ANY, fs.fs_file_start);
+ 		if (blob != NULL) {
+ 			/* If this is for dyld_sim revalidate the blob */
+@@ -4001,6 +4199,7 @@
+ 			} else { /* F_ADDFILESIGS || F_ADDFILESIGS_RETURN || F_ADDFILESIGS_FOR_DYLD_SIM || F_ADDFILESIGS_INFO */
+ 				int resid;
+ 
++				sig_stage = native_sig_stage_begin(&sig_timing);
+ 				error = vn_rdwr(UIO_READ,
+ 				    vp,
+ 				    (caddr_t) kernel_blob_addr,
+@@ -4011,6 +4210,7 @@
+ 				    kauth_cred_get(),
+ 				    &resid,
+ 				    p);
++				native_sig_stage_end(&sig_timing, sig_stage, kernel_blob_size, 0);
+ 				if ((error == 0) && resid) {
+ 					/* kernel_blob_size rounded to a page size, but signature may be at end of file */
+ 					memset((void *)(kernel_blob_addr + (kernel_blob_size - resid)), 0x0, resid);
+@@ -4025,6 +4225,7 @@
+ 			}
+ 
+ 			blob = NULL;
++			sig_stage = native_sig_stage_begin(&sig_timing);
+ 			error = ubc_cs_blob_add(vp,
+ 			    proc_platform(p),
+ 			    CPU_TYPE_ANY,                       /* not for a specific architecture */
+@@ -4035,6 +4236,7 @@
+ 			    NULL,
+ 			    blob_add_flags,
+ 			    &blob);
++			native_sig_stage_end(&sig_timing, sig_stage, kernel_blob_size, 1);
+ 
+ 			/* ubc_blob_add() has consumed "kernel_blob_addr" if it is zeroed */
+ 			if (error) {
+@@ -5293,10 +5495,10 @@
+ 	}
+ 
+ outdrop:
+-	return sys_fcntl_outdrop(p, fd, fp, vp, error);
++	return native_sig_finish(&sig_timing, sys_fcntl_outdrop(p, fd, fp, vp, error));
+ 
+ out:
+-	return sys_fcntl_out(p, fd, fp, error);
++	return native_sig_finish(&sig_timing, sys_fcntl_out(p, fd, fp, error));
+ }
+ 
+ 
+diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
+--- a/bsd/kern/ubc_subr.c
++++ b/bsd/kern/ubc_subr.c
+@@ -4638,6 +4638,81 @@
+ 	return 0;
+ }
+ 
++/* Optional disjoint blob-add wall intervals. INIT is exactly the initial
++ * cs_blob_init_validated call; PRE ends immediately before MACF (or POST when
++ * MACF is absent). MAC is exactly the callback; POST includes subsequent work,
++ * vnode lock/wait and original cleanup. No pointer survives as a reference. */
++#if defined(XNU_ROOT_TIMING) && XNU_ROOT_TIMING
++#include <kern/clock.h>
++#include <pexpert/pexpert.h>
++extern void native_root_blob_timing_record(int, uint64_t, uintptr_t, uint32_t, int64_t,
++    const uint64_t [4], unsigned, int);
++struct native_blob_timing { int enabled, pid; uint64_t uid; uintptr_t address;
++    uint32_t vid; int64_t base; uint64_t stamp, ns[4]; unsigned phase, mac_count; };
++static uint64_t
++native_blob_now(void)
++{
++	uint64_t ns = 0;
++	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
++	return ns;
++}
++static struct native_blob_timing
++native_blob_begin(struct vnode *vp, int64_t base)
++{
++	struct native_blob_timing t = {0};
++	unsigned flag = 0;
++	if (!PE_parse_boot_argn("native-root-timing", &flag, sizeof(flag)) || flag != 1) return t;
++	proc_t p = current_proc();
++	t.pid = proc_getpid(p); t.uid = proc_uniqueid(p);
++	if (t.pid <= 0 || !t.uid) return t;
++	t.enabled = 1; t.address = (uintptr_t)vp; t.vid = vnode_vid(vp); t.base = base;
++	t.stamp = native_blob_now();
++	return t;
++}
++static void
++native_blob_mark(struct native_blob_timing *t, unsigned phase)
++{
++	if (!t->enabled) return;
++	uint64_t now = native_blob_now();
++	t->ns[t->phase] += now - t->stamp;
++	t->stamp = now; t->phase = phase;
++	if (phase == 2) t->mac_count++;
++}
++extern void native_root_prepare_timing_record(int, uint64_t, uint64_t, uint64_t, int, int);
++static uint64_t
++native_blob_prepare_begin(const struct native_blob_timing *t)
++{
++	return t->enabled ? native_blob_now() : 0;
++}
++static void
++native_blob_prepare_end(const struct native_blob_timing *t, uint64_t start, uint64_t bytes, int error)
++{
++	if (t->enabled) native_root_prepare_timing_record(t->pid, t->uid, bytes, native_blob_now() - start, error, 0);
++}
++static void
++native_blob_prepare_reused(const struct native_blob_timing *t)
++{
++	if (t->enabled) native_root_prepare_timing_record(t->pid, t->uid, 0, 0, 0, 1);
++}
++static int
++native_blob_finish(struct native_blob_timing *t, int error)
++{
++	if (t->enabled) {
++		native_blob_mark(t, 3);
++		native_root_blob_timing_record(t->pid, t->uid, t->address, t->vid, t->base, t->ns, t->mac_count, error);
++	}
++	return error;
++}
++#else
++struct native_blob_timing { int unused; };
++#define native_blob_begin(vp, base) ((struct native_blob_timing){0})
++#define native_blob_mark(t, phase) ((void)(t))
++#define native_blob_prepare_begin(t) ((void)(t), 0ULL)
++#define native_blob_prepare_end(t, start, bytes, error) ((void)(t), (void)(start))
++#define native_blob_prepare_reused(t) ((void)(t))
++#define native_blob_finish(t, error) ((void)(t), (error))
++#endif
++
+ int
+ ubc_cs_blob_add(
+ 	struct vnode    *vp,
+@@ -4682,10 +4757,13 @@
+ 	 * We initialize a temporary blob whose contents are then copied into an RO
+ 	 * blob which we allocate from the read-only allocator.
+ 	 */
++	struct native_blob_timing timing = native_blob_begin(vp, base_offset);
+ 	error = cs_blob_init_validated(addr, size, &tmp_blob, &cd);
++	native_blob_mark(&timing, 1);
+ 	if (error != 0) {
++		native_blob_mark(&timing, 3);
+ 		printf("unable to create a validated cs_blob object: %d\n", error);
+-		return error;
++		return native_blob_finish(&timing, error);
+ 	}
+ 
+ 	tmp_blob.csb_cpu_type = cputype;
+@@ -4753,6 +4831,7 @@
+ 	unsigned int cs_flags = tmp_blob.csb_flags;
+ 	unsigned int signer_type = tmp_blob.csb_signer_type;
+ 
++	native_blob_mark(&timing, 2);
+ 	error = mac_vnode_check_signature(
+ 		vp,
+ 		&tmp_blob,
+@@ -4761,6 +4840,7 @@
+ 		&signer_type,
+ 		flags,
+ 		platform);
++	native_blob_mark(&timing, 3);
+ 
+ 	if (error != 0) {
+ 		printf("validation of code signature failed through MACF policy: %d\n", error);
+@@ -4795,6 +4875,7 @@
+ 		goto out;
+ 	}
+ #endif /* CONFIG_MACF */
++	native_blob_mark(&timing, 3);
+ 
+ #if CODE_SIGNING_MONITOR
+ 	error = verify_code_signature_monitor(&tmp_blob);
+@@ -5054,6 +5135,7 @@
+ 	error = 0;      /* success ! */
+ 
+ out:
++	native_blob_mark(&timing, 3);
+ 	if (error) {
+ 		if (error != EAGAIN) {
+ 			printf("check_signature[pid: %d]: error = %d\n", proc_getpid(current_proc()), error);
+@@ -5074,7 +5156,7 @@
+ 		error = 0;
+ 	}
+ 
+-	return error;
++	return native_blob_finish(&timing, error);
+ }
+ 
+ #if CONFIG_SUPPLEMENTAL_SIGNATURES

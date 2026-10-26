@@ -21,6 +21,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -106,14 +107,27 @@ def main():
         attached = run('hdiutil', 'attach', '-imagekey', 'diskimage-class=CRawDiskImage', '-nomount', '-nobrowse', str(raw))
         store = re.match(r'(/dev/disk\d+)', attached).group(1).split('/')[-1]
         try:
-            listing = plistlib.loads(subprocess.check_output(['diskutil', 'apfs', 'list', '-plist']))
+            # The container of the attached image: its physical store is the whole image (diskN) or, on newer macOS,
+            # a slice of it (diskNsM). The APFS list can lag the attach, so it is read a few times.
             container = None
-            for entry in listing['Containers']:
-                if any(s['DeviceIdentifier'] == store for s in entry.get('PhysicalStores', [])):
-                    container = entry['ContainerReference']
-            if not container:
-                sys.exit('No APFS container found on the attached seed')
-            run('diskutil', 'apfs', 'resizeContainer', container, '0')
+            for _ in range(5):
+                listing = plistlib.loads(subprocess.check_output(['diskutil', 'apfs', 'list', '-plist']))
+                for entry in listing['Containers']:
+                    if any(re.fullmatch(store + r'(s\d+)?', s['DeviceIdentifier']) for s in entry.get('PhysicalStores', [])):
+                        container = entry['ContainerReference']
+                if container:
+                    break
+                time.sleep(2)
+            if container:
+                run('diskutil', 'apfs', 'resizeContainer', container, '0')
+            else:
+                # resizeContainer also takes the physical store itself.
+                for candidate in (store + 's1', store):
+                    if subprocess.run(['diskutil', 'apfs', 'resizeContainer', candidate, '0']).returncode == 0:
+                        break
+                else:
+                    subprocess.run(['diskutil', 'list', store])
+                    sys.exit('No APFS container found on the attached seed')
         finally:
             subprocess.run(['hdiutil', 'detach', store, '-force'], capture_output=True)
         header = raw.open('rb').read(4096)

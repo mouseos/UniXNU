@@ -299,6 +299,8 @@ def fetch(ctx, modules, update=False, only=None):
             except Error:
                 current = None
         if current and current == target and (not sparse or all((directory / path).exists() for path in paths)):
+            # A checkout left by an interrupted fetch, or made before the entry listed submodules, may lack them.
+            _update_entry_submodules(directory, entry)
             _attach(members, directory, current, commits)
             continue
         log(f'fetch {entry["git"]} {target[:12]}' + (f' ({", ".join(paths)})' if sparse else ''))
@@ -315,12 +317,16 @@ def fetch(ctx, modules, update=False, only=None):
             git(directory, 'sparse-checkout', 'disable')
             run(['git', '-C', directory, 'fetch', '-q', '--depth', '1', 'origin', target])
         git(directory, 'checkout', '-q', '--detach', 'FETCH_HEAD')
-        if entry.get('submodules'):
-            # Upstream trees such as edk2 need their own submodules. UniXNU module submodules are
-            # updated from the root and device repositories by update_submodules().
-            run(['git', '-C', directory, 'submodule', 'update', '--init', '--depth', '1', '--', *entry['submodules']])
+        _update_entry_submodules(directory, entry)
         _attach(members, directory, git(directory, 'rev-parse', 'HEAD').strip(), commits)
     return commits
+
+
+def _update_entry_submodules(directory, entry):
+    # Upstream trees such as edk2 need their own submodules. UniXNU module submodules are
+    # updated from the root and device repositories by update_submodules().
+    if entry.get('submodules'):
+        run(['git', '-C', directory, 'submodule', 'update', '--init', '--depth', '1', '--', *entry['submodules']])
 
 
 def _attach(members, directory, commit, commits):

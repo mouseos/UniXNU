@@ -1,0 +1,304 @@
+diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
+--- a/bsd/kern/ubc_subr.c
++++ b/bsd/kern/ubc_subr.c
+@@ -4728,6 +4728,151 @@
+ #define native_blob_finish(t, error) ((void)(t), (error))
+ #endif
+ 
++/* Original duplicate/slice equivalence, called only while vnode_lock is held.
++ * The early path may accept only an already-complete native4k cache. Mismatches
++ * still take the original preparation/final-check path to preserve error order. */
++static int
++cs_native4k_existing_locked(struct vnode *vp, struct cs_blob *candidate,
++    cpu_type_t cputype, off_t blob_start_offset, off_t blob_end_offset,
++    struct cs_blob **ret_blob, int require_cache)
++{
++	struct ubc_info *uip = vp->v_ubcinfo;
++	struct cs_blob *oblob;
++	/* check if this new blob overlaps with an existing blob */
++	for (oblob = ubc_get_cs_blobs(vp);
++	    oblob != NULL;
++	    oblob = oblob->csb_next) {
++		off_t oblob_start_offset, oblob_end_offset;
++
++		if (candidate->csb_signer_type != oblob->csb_signer_type) {  // signer type needs to be the same for slices
++			return EALREADY;
++		} else if (candidate->csb_platform_binary) {  //platform binary needs to be the same for app slices
++			if (!oblob->csb_platform_binary) {
++				return EALREADY;
++			}
++		} else if (candidate->csb_teamid) {  //teamid binary needs to be the same for app slices
++			if (oblob->csb_platform_binary ||
++			    oblob->csb_teamid == NULL ||
++			    strcmp(oblob->csb_teamid, candidate->csb_teamid) != 0) {
++				return EALREADY;
++			}
++		} else {  // non teamid binary needs to be the same for app slices
++			if (oblob->csb_platform_binary ||
++			    oblob->csb_teamid != NULL) {
++				return EALREADY;
++			}
++		}
++
++		oblob_start_offset = (oblob->csb_base_offset +
++		    oblob->csb_start_offset);
++		oblob_end_offset = (oblob->csb_base_offset +
++		    oblob->csb_end_offset);
++		if (blob_start_offset >= oblob_end_offset ||
++		    blob_end_offset <= oblob_start_offset) {
++			/* no conflict with this existing blob */
++		} else {
++			/* conflict ! */
++			if (blob_start_offset == oblob_start_offset &&
++			    blob_end_offset == oblob_end_offset &&
++			    candidate->csb_mem_size == oblob->csb_mem_size &&
++			    candidate->csb_flags == oblob->csb_flags &&
++			    (candidate->csb_cpu_type == CPU_TYPE_ANY ||
++			    oblob->csb_cpu_type == CPU_TYPE_ANY ||
++			    candidate->csb_cpu_type == oblob->csb_cpu_type) &&
++			    !bcmp(candidate->csb_cdhash,
++			    oblob->csb_cdhash,
++			    CS_CDHASH_LEN)) {
++				/*
++				 * We already have this blob:
++				 * we'll return success but
++				 * throw away the new blob.
++				 */
++				if (require_cache && oblob->csb_native4k_hashes == NULL) return 0;
++				if (oblob->csb_cpu_type == CPU_TYPE_ANY) {
++					/*
++					 * The old blob matches this one
++					 * but doesn't have any CPU type.
++					 * Update it with whatever the caller
++					 * provided this time.
++					 */
++					cs_blob_set_cpu_type(oblob, cputype);
++				}
++
++				/* The signature is still accepted, so update the
++				 * generation count. */
++				uip->cs_add_gen = cs_blob_generation_count;
++
++				if (ret_blob) {
++					*ret_blob = oblob;
++				}
++				return EAGAIN;
++			} else {
++				/* different blob: reject the new one */
++				return EALREADY;
++			}
++		}
++	}
++
++	return 0;
++}
++
++#if defined(XNU_NATIVE_CS_HASH_CACHE) && XNU_NATIVE_CS_HASH_CACHE
++#include <kern/locks.h>
++#include <pexpert/pexpert.h>
++/* This registry holds only active producers. Waiters retain their own caller
++ * vnode reference; no vnode/reference or failed result remains after release.
++ * The registry mutex is never held during vnode/VM locks, I/O or preparation. */
++struct cs_native4k_gate { struct vnode *vp; uint32_t vid; };
++static struct cs_native4k_gate cs_native4k_gates[64];
++static LCK_GRP_DECLARE(cs_native4k_gate_group, "native_cs_coalesce");
++static LCK_MTX_DECLARE(cs_native4k_gate_lock, &cs_native4k_gate_group);
++/* Report the effective requested signing limit, including rejected 64-bit
++ * requests; this is not a count of completed I/O bytes. */
++static uint64_t
++cs_native4k_requested_limit(const CS_CodeDirectory *cd)
++{
++	if (ntohl(cd->version) >= CS_SUPPORTSCODELIMIT64 && ntohll(cd->codeLimit64)) return ntohll(cd->codeLimit64);
++	return ntohl(cd->codeLimit);
++}
++static struct cs_native4k_gate *
++cs_native4k_gate_enter(struct vnode *vp, unsigned hash_shift)
++{
++	unsigned flag = 0;
++	if (PAGE_SHIFT != 12 || hash_shift != 14 || !vnode_vfsisrdonly(vp) ||
++	    !PE_parse_boot_argn("native-cs-coalesce", &flag, sizeof(flag)) || flag != 1) return NULL;
++	uint32_t vid = vnode_vid(vp);
++	lck_mtx_lock(&cs_native4k_gate_lock);
++	for (;;) {
++		struct cs_native4k_gate *empty = NULL, *busy = NULL;
++		for (unsigned i = 0; i < 64; i++) {
++			struct cs_native4k_gate *g = &cs_native4k_gates[i];
++			if (g->vp == vp && g->vid == vid) { busy = g; break; }
++			if (!g->vp && !empty) empty = g;
++		}
++		if (busy) {
++			(void)msleep(busy, &cs_native4k_gate_lock, PRIBIO, "cs4k_reg", NULL);
++			continue;
++		}
++		if (empty) { empty->vp = vp; empty->vid = vid; }
++		lck_mtx_unlock(&cs_native4k_gate_lock);
++		return empty; /* full table: preserve original uncoupled path */
++	}
++}
++static void
++cs_native4k_gate_leave(struct cs_native4k_gate *gate)
++{
++	if (!gate) return;
++	lck_mtx_lock(&cs_native4k_gate_lock);
++	gate->vp = NULL; gate->vid = 0;
++	wakeup(gate);
++	lck_mtx_unlock(&cs_native4k_gate_lock);
++}
++#else
++struct cs_native4k_gate;
++#define cs_native4k_gate_enter(vp, shift) NULL
++#define cs_native4k_gate_leave(gate) ((void)(gate))
++#endif
++
+ int
+ ubc_cs_blob_add(
+ 	struct vnode    *vp,
+@@ -4745,7 +4890,7 @@
+ 	struct ubc_info *uip = NULL;
+ 	struct cs_blob tmp_blob = {0};
+ 	struct cs_blob *blob_ro = NULL;
+-	struct cs_blob *oblob = NULL;
++	struct cs_native4k_gate *native_gate = NULL;
+ 	CS_CodeDirectory const *cd = NULL;
+ 	off_t blob_start_offset = 0;
+ 	off_t blob_end_offset = 0;
+@@ -4956,8 +5101,35 @@
+ 	}
+ 
+ #if defined(XNU_NATIVE_CS_HASH_CACHE) && XNU_NATIVE_CS_HASH_CACHE
+-	/* Authenticate before publishing the signed object or taking its locks. */
++	/* Each caller has completed its own validation/MACF before joining.
++	 * Protect the stack blob across the new blocking wait/lookup as well. */
++	cs_blob_sig = ptrauth_utils_sign_blob_generic(&tmp_blob, sizeof(tmp_blob),
++	    OS_PTRAUTH_DISCRIMINATOR("ubc_cs_blob_add.blocking_op0"), PTRAUTH_ADDR_DIVERSIFY);
++	native_gate = cs_native4k_gate_enter(vp, tmp_blob.csb_hash_pageshift);
++	if (native_gate) {
++		vnode_lock(vp);
++		int duplicate = 0;
++		if (UBCINFOEXISTS(vp) && vnode_vid(vp) == native_gate->vid && vnode_vfsisrdonly(vp)) {
++			duplicate = cs_native4k_existing_locked(vp, &tmp_blob, cputype,
++			    blob_start_offset, blob_end_offset, ret_blob, 1);
++		}
++		vnode_unlock(vp);
++		ptrauth_utils_auth_blob_generic(&tmp_blob, sizeof(tmp_blob),
++		    OS_PTRAUTH_DISCRIMINATOR("ubc_cs_blob_add.blocking_op0"), PTRAUTH_ADDR_DIVERSIFY, cs_blob_sig);
++		if (duplicate == EAGAIN) {
++			native_blob_prepare_reused(&timing);
++			error = EAGAIN;
++			goto out;
++		}
++	} else {
++		ptrauth_utils_auth_blob_generic(&tmp_blob, sizeof(tmp_blob),
++		    OS_PTRAUTH_DISCRIMINATOR("ubc_cs_blob_add.blocking_op0"), PTRAUTH_ADDR_DIVERSIFY, cs_blob_sig);
++	}
++	/* All original blocks must verify before any derived array is published. */
++	uint64_t prepare_start = native_blob_prepare_begin(&timing);
+ 	error = cs_native4k_prepare(vp, &tmp_blob);
++	native_blob_prepare_end(&timing, prepare_start,
++	    tmp_blob.csb_hash_pageshift == 14 ? cs_native4k_requested_limit(tmp_blob.csb_cd) : 0, error);
+ 	if (error != 0) {
+ 		goto out;
+ 	}
+@@ -4981,91 +5153,9 @@
+ 	}
+ 	uip = vp->v_ubcinfo;
+ 
+-	/* check if this new blob overlaps with an existing blob */
+-	for (oblob = ubc_get_cs_blobs(vp);
+-	    oblob != NULL;
+-	    oblob = oblob->csb_next) {
+-		off_t oblob_start_offset, oblob_end_offset;
+-
+-		if (tmp_blob.csb_signer_type != oblob->csb_signer_type) {  // signer type needs to be the same for slices
+-			vnode_unlock(vp);
+-			error = EALREADY;
+-			goto out;
+-		} else if (tmp_blob.csb_platform_binary) {  //platform binary needs to be the same for app slices
+-			if (!oblob->csb_platform_binary) {
+-				vnode_unlock(vp);
+-				error = EALREADY;
+-				goto out;
+-			}
+-		} else if (tmp_blob.csb_teamid) {  //teamid binary needs to be the same for app slices
+-			if (oblob->csb_platform_binary ||
+-			    oblob->csb_teamid == NULL ||
+-			    strcmp(oblob->csb_teamid, tmp_blob.csb_teamid) != 0) {
+-				vnode_unlock(vp);
+-				error = EALREADY;
+-				goto out;
+-			}
+-		} else {  // non teamid binary needs to be the same for app slices
+-			if (oblob->csb_platform_binary ||
+-			    oblob->csb_teamid != NULL) {
+-				vnode_unlock(vp);
+-				error = EALREADY;
+-				goto out;
+-			}
+-		}
+-
+-		oblob_start_offset = (oblob->csb_base_offset +
+-		    oblob->csb_start_offset);
+-		oblob_end_offset = (oblob->csb_base_offset +
+-		    oblob->csb_end_offset);
+-		if (blob_start_offset >= oblob_end_offset ||
+-		    blob_end_offset <= oblob_start_offset) {
+-			/* no conflict with this existing blob */
+-		} else {
+-			/* conflict ! */
+-			if (blob_start_offset == oblob_start_offset &&
+-			    blob_end_offset == oblob_end_offset &&
+-			    tmp_blob.csb_mem_size == oblob->csb_mem_size &&
+-			    tmp_blob.csb_flags == oblob->csb_flags &&
+-			    (tmp_blob.csb_cpu_type == CPU_TYPE_ANY ||
+-			    oblob->csb_cpu_type == CPU_TYPE_ANY ||
+-			    tmp_blob.csb_cpu_type == oblob->csb_cpu_type) &&
+-			    !bcmp(tmp_blob.csb_cdhash,
+-			    oblob->csb_cdhash,
+-			    CS_CDHASH_LEN)) {
+-				/*
+-				 * We already have this blob:
+-				 * we'll return success but
+-				 * throw away the new blob.
+-				 */
+-				if (oblob->csb_cpu_type == CPU_TYPE_ANY) {
+-					/*
+-					 * The old blob matches this one
+-					 * but doesn't have any CPU type.
+-					 * Update it with whatever the caller
+-					 * provided this time.
+-					 */
+-					cs_blob_set_cpu_type(oblob, cputype);
+-				}
+-
+-				/* The signature is still accepted, so update the
+-				 * generation count. */
+-				uip->cs_add_gen = cs_blob_generation_count;
+-
+-				vnode_unlock(vp);
+-				if (ret_blob) {
+-					*ret_blob = oblob;
+-				}
+-				error = EAGAIN;
+-				goto out;
+-			} else {
+-				/* different blob: reject the new one */
+-				vnode_unlock(vp);
+-				error = EALREADY;
+-				goto out;
+-			}
+-		}
+-	}
++	error = cs_native4k_existing_locked(vp, &tmp_blob, cputype,
++	    blob_start_offset, blob_end_offset, ret_blob, 0);
++	if (error) { vnode_unlock(vp); goto out; }
+ 
+ 	/* mark this vnode's VM object as having "signed pages" */
+ 	kr = memory_object_signed(uip->ui_control, TRUE);
+@@ -5179,6 +5269,7 @@
+ 		error = 0;
+ 	}
+ 
++	cs_native4k_gate_leave(native_gate);
+ 	return native_blob_finish(&timing, error);
+ }
+ 

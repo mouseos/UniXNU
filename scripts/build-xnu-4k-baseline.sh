@@ -31,25 +31,10 @@ if [ ! -x .cache/fakeroot/usr/local/libexec/availability.pl ]; then
     OBJROOT="$ROOT/build/availability" SYMROOT="$ROOT/build/availability" \
     DSTROOT="$ROOT/.cache/fakeroot" CMAKE="$(command -v cmake)" NINJA="$(command -v ninja)"
 fi
-# Format 2 prepares its ordered patch series through the shared resolver.
+# Format 2 has already applied the resolver's ordered patch plan.
 if [ -z "${UNIXNU_PATCH_LIST:-}" ]; then
-# The optional observation hooks overlap existing root/exec patch context.
-# Remove them first so earlier independent patches retain their idempotent checks.
-# The same holds for the boot-time GPU addon mount and the staged system apps copy (zzy), which edit the owner Data mount function
-# inside the systemos patch. Reverse newest first; the loop below re-applies them in name order.
-for LATE_PATCH in "$ROOT/patches/xnu/zzz-boot-progress.patch" "$ROOT/patches/xnu/zzyb-native-cryptex-os-view.patch" \
-    "$ROOT/patches/xnu/zzy-staged-system-apps.patch" "$ROOT/patches/xnu/zzy-native-gpu-addon-mount.patch" \
-    "$ROOT/patches/xnu/zzyc-owner-skip-launch-constraints.patch"; do
-  if git -C .cache/xnu-work apply --reverse --check "$LATE_PATCH" >/dev/null 2>&1; then
-    git -C .cache/xnu-work apply --reverse "$LATE_PATCH"
-  fi
-done
-for PATCH in "$ROOT"/patches/xnu/*.patch "$ROOT"/kits/XnuPrelink/patches/*.patch; do
-  if ! git -C .cache/xnu-work apply --reverse --check "$PATCH" >/dev/null 2>&1; then
-    git -C .cache/xnu-work apply --check "$PATCH"
-    git -C .cache/xnu-work apply "$PATCH"
-  fi
-done
+# Preserve schema-1 incremental patch refresh without deleting build caches.
+python3 scripts/prepare-xnu-patches.py --root "$ROOT" --revision "$XNU_COMMIT"
 fi
 export XNU_AVAILABILITY_PL=$ROOT/.cache/fakeroot/usr/local/libexec/availability.pl
 python3 scripts/prepare-xnu-source.py
@@ -211,6 +196,15 @@ if [ "$NATIVE_RAM_BLOCK" = 1 ]; then
 fi
 if [ "${XNU_NATIVE_UFS:-0}" = 1 ]; then
   PERSONALITY_CFLAGS="$PERSONALITY_CFLAGS -DXNU_NATIVE_UFS=1"
+fi
+# MediaTek MT8167 MSDC eMMC storage (drivers/NativeMsdc): personality and archive, off by default.
+NATIVE_MSDC=${XNU_NATIVE_MSDC:-0}
+if [ "$NATIVE_MSDC" != 0 ] && [ "$NATIVE_MSDC" != 1 ]; then
+  echo 'XNU_NATIVE_MSDC must be 0 or 1' >&2
+  exit 1
+fi
+if [ "$NATIVE_MSDC" = 1 ]; then
+  PERSONALITY_CFLAGS="$PERSONALITY_CFLAGS -DXNU_NATIVE_MSDC=1"
 fi
 NATIVE_VIRTIO_CONSOLE=${XNU_NATIVE_VIRTIO_CONSOLE:-0}
 if [ "$NATIVE_VIRTIO_CONSOLE" != 0 ] && [ "$NATIVE_VIRTIO_CONSOLE" != 1 ]; then
@@ -553,6 +547,25 @@ if [ "$NATIVE_PAN" != 0 ] && [ "$NATIVE_PAN" != 1 ]; then
   exit 1
 fi
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_PAN=$NATIVE_PAN"
+NS16550_UART=${XNU_NS16550_UART:-0}
+if [ "$NS16550_UART" != 0 ] && [ "$NS16550_UART" != 1 ]; then
+  echo 'XNU_NS16550_UART must be 0 or 1' >&2
+  exit 1
+fi
+# Only a board that selects the flag changes the kernel flags, so other boards keep their incremental builds.
+if [ "$NS16550_UART" = 1 ]; then EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NS16550_UART=1"; fi
+BOARD_INIT=${XNU_BOARD_INIT:-0}
+if [ "$BOARD_INIT" != 0 ] && [ "$BOARD_INIT" != 1 ]; then
+  echo 'XNU_BOARD_INIT must be 0 or 1' >&2
+  exit 1
+fi
+if [ "$BOARD_INIT" = 1 ]; then EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOARD_INIT=1"; fi
+BOARD_LAUNCH=${XNU_BOARD_LAUNCH:-0}
+if [ "$BOARD_LAUNCH" != 0 ] && [ "$BOARD_LAUNCH" != 1 ]; then
+  echo 'XNU_BOARD_LAUNCH must be 0 or 1' >&2
+  exit 1
+fi
+if [ "$BOARD_LAUNCH" = 1 ]; then EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOARD_LAUNCH=1"; fi
 if [ "$NATIVE_PAN" = 1 ]; then
   EXTRA_MAKE_ARGS+=("copyio.o_CFLAGS_ADD=-march=armv8.1-a")
   EXTRA_MAKE_ARGS+=("pcb.o_CFLAGS_ADD=-march=armv8.1-a")
@@ -617,6 +630,44 @@ if [ "${XNU_SOURCE_CORECRYPTO14:-0}" = 1 ] && [ "$BOOTSTRAP" = 0 ]; then
     test -f "$UFS_ARCHIVE"
     KERNEL_EXTRA_ARCHIVES="$KERNEL_EXTRA_ARCHIVES -Wl,-force_load,$UFS_ARCHIVE"
     KERNEL_ARCHIVE_DEPENDENCIES="$KERNEL_ARCHIVE_DEPENDENCIES $UFS_ARCHIVE"
+  fi
+  if [ "$NATIVE_MSDC" = 1 ]; then
+    MSDC_ARCHIVE=$ROOT/build/native-msdc/libNativeMsdc.a
+    test -f "$MSDC_ARCHIVE"
+    # With its window block devices the archive also carries the original storage aliases
+    # (build-native-virtio-bindings.py --component NativeMsdc). When VirtIO block or the RAM block
+    # already defines them, link only the object, and only if every import has the same value.
+    MSDC_BINDINGS=$ROOT/build/native-msdc/bindings.json
+    if [ -f "$MSDC_BINDINGS" ] && { [ "${XNU_NATIVE_VIRTIO_BLOCK:-0}" = 1 ] || [ "$NATIVE_RAM_BLOCK" = 1 ]; }; then
+      if [ "${XNU_NATIVE_VIRTIO_BLOCK:-0}" = 1 ]; then
+        STORAGE_ALIAS_ARCHIVE=${XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE:-$ROOT/build/native-virtio-block/libNativeVirtioBlock.a}
+      else
+        STORAGE_ALIAS_ARCHIVE=$ROOT/build/native-ram-block/libNativeRamBlock.a
+      fi
+      python3 - "$STORAGE_ALIAS_ARCHIVE" "$MSDC_ARCHIVE" <<'PY_MSDC_BINDINGS'
+import hashlib
+import json
+from pathlib import Path
+import sys
+records = []
+for archive in sys.argv[1:]:
+    path = Path(archive)
+    record = json.loads(path.with_name('bindings.json').read_text())
+    obj = path.with_name(path.stem.removeprefix('lib') + '.o')
+    if hashlib.sha256(obj.read_bytes()).hexdigest() != record['compiled_object_sha256']:
+        raise SystemExit('Re-audit the actual compiled storage object before linking')
+    records.append(record['bindings'])
+first, second = records
+if any(first.get(name) != value for name, value in second.items()):
+    raise SystemExit('NativeMsdc storage imports must match the already linked original storage bindings')
+PY_MSDC_BINDINGS
+      MSDC_OBJECT=$ROOT/build/native-msdc/NativeMsdc.o
+      test -f "$MSDC_OBJECT"
+      KERNEL_EXTRA_ARCHIVES="$KERNEL_EXTRA_ARCHIVES $MSDC_OBJECT"
+    else
+      KERNEL_EXTRA_ARCHIVES="$KERNEL_EXTRA_ARCHIVES -Wl,-force_load,$MSDC_ARCHIVE"
+    fi
+    KERNEL_ARCHIVE_DEPENDENCIES="$KERNEL_ARCHIVE_DEPENDENCIES $MSDC_ARCHIVE"
   fi
   if [ "${XNU_NATIVE_ADRENO:-0}" = 1 ]; then
     # NativeAdreno plus its kits (scripts/build-native-adreno-kits.py). No personality is installed: the
@@ -753,6 +804,14 @@ PY_BINDINGS
     KERNEL_ARCHIVE_DEPENDENCIES="$KERNEL_ARCHIVE_DEPENDENCIES $ROOT/build/boot-progress/libBootProgress.a"
   fi
   KERNEL_EXTRA_ARCHIVES="$KERNEL_EXTRA_ARCHIVES ${XNU_EXTRA_LD_ARCHIVES:-}"
+  # Archives named in XNU_EXTRA_LD_ARCHIVES (plain paths or -Wl,-force_load,PATH) are link dependencies too, so an
+  # updated board archive relinks the kernel.
+  for EXTRA_ARCHIVE in ${XNU_EXTRA_LD_ARCHIVES:-}; do
+    case "$EXTRA_ARCHIVE" in
+      -Wl,-force_load,*) KERNEL_ARCHIVE_DEPENDENCIES="$KERNEL_ARCHIVE_DEPENDENCIES ${EXTRA_ARCHIVE#-Wl,-force_load,}" ;;
+      *.a) KERNEL_ARCHIVE_DEPENDENCIES="$KERNEL_ARCHIVE_DEPENDENCIES $EXTRA_ARCHIVE" ;;
+    esac
+  done
   EXTRA_MAKE_ARGS+=("LD_KERNEL_ARCHIVES=$KERNEL_EXTRA_ARCHIVES")
   EXTRA_MAKE_ARGS+=("XNU_EXTERNAL_KERNEL_ARCHIVES=$KERNEL_ARCHIVE_DEPENDENCIES")
 fi
@@ -767,7 +826,8 @@ python3 - "${XNU_NATIVE_AES:-0}" "${XNU_NATIVE_AES_ARCHIVE:-$ROOT/build/software
   "$NATIVE_VIRTIO_CONSOLE" "$ROOT/build/virtio-mmio-console/libVirtioMmioConsole.a" \
   "$NATIVE_OFFLINE_GPU" "$ROOT/build/native-offline-gpu/libNativeOfflineGPU.late.a" \
   "$SHENG_PMGR" "$ROOT/build/sheng-platform-power/libShengPlatformPower.a" \
-  "${XNU_NATIVE_ADRENO:-0}" "$ROOT/build/adreno740/libAdreno740.a" <<'PY'
+  "${XNU_NATIVE_ADRENO:-0}" "$ROOT/build/adreno740/libAdreno740.a" \
+  "$NATIVE_MSDC" "$ROOT/build/native-msdc/libNativeMsdc.a" <<'PY'
 import hashlib
 from pathlib import Path
 import sys
@@ -793,6 +853,24 @@ if not stamp.exists() or stamp.read_text() != identity:
     directory.mkdir(parents=True, exist_ok=True)
     stamp.write_text(identity)
 PY
+ROOT_TIMING=${XNU_ROOT_TIMING:-0}
+if [[ "$ROOT_TIMING" != 0 && "$ROOT_TIMING" != 1 ]]; then
+  echo 'XNU_ROOT_TIMING must be 0 or 1' >&2
+  exit 1
+fi
+python3 - "$ROOT_TIMING" <<'PYROOT'
+from pathlib import Path
+import sys
+out = Path('build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837')
+stamp = out / '.root-timing-mode'
+mode = sys.argv[1]
+if not stamp.exists() or stamp.read_text() != mode:
+    for relative in ('bsd/DEVELOPMENT/vm_unix.o', 'bsd/DEVELOPMENT/kern_descrip.o', 'bsd/DEVELOPMENT/ubc_subr.o', 'mach.development.bcm2837.unstripped.noctf'):
+        (out / relative).unlink(missing_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(mode)
+PYROOT
+EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_ROOT_TIMING=$ROOT_TIMING"
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOOT_PROGRESS=$BOOT_PROGRESS"
 make -C .cache/xnu-work "${XNU_BUILD_TARGET:-build}" SDKROOT="${XNU_SDKROOT:-iphoneos}" ARCH_CONFIGS=ARM64 \
   MACHINE_CONFIGS=BCM2837 KERNEL_CONFIGS=DEVELOPMENT \

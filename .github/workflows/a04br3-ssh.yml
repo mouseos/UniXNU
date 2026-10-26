@@ -1,0 +1,314 @@
+name: a04br3 SSH incremental build
+
+# Development workflow of the a04br3 port (not part of the upstream pull requests): one full build as macos.yml does
+# with the a04br3 inputs, then the same runner stays reachable over SSH (upterm, the key below) for incremental
+# rebuilds: /tmp/a04br3-rebuild.sh <device ref> rebuilds the kernel and payload and publishes them as assets of the
+# release a04br3-ssh-<run id>. The connection command is the commit status a04br3/ssh. End with: touch /tmp/a04br3-done
+
+on:
+  workflow_dispatch:
+    inputs:
+      device_ref:
+        description: "UniXNU-a04br3 ref (RAM600-compatible WIP pin; hardware qualification pending)"
+        required: true
+        default: dde2dab72621c02696857abc12b29977cdc447a2
+      skip_setup:
+        description: "Mark Setup done and skip the first-boot data migration in the Data seed (board skip_setup_tool, docs/guide/skip-setup.md), as macos.yml"
+        type: boolean
+        default: true
+      powervr_probe:
+        description: "Stage the PowerVR user-space probe (device scripts/a04br3-pre-build.sh A04BR3_POWERVR_PROBE=1) and take the trust cache as an owner bundle"
+        type: boolean
+        default: false
+      powervr_metal:
+        description: "With powervr_probe: also the PowerVR Metal plugin (device scripts/a04br3-pre-build.sh A04BR3_POWERVR_METAL=1)"
+        type: boolean
+        default: false
+      powervr_metal_mode:
+        description: "PowerVR Metal mode: selftest keeps the CPU renderer; publish enables GPU compositing"
+        type: choice
+        options:
+          - selftest
+          - publish
+        default: selftest
+      powervr_metal_roa_color:
+        description: "Experimental GE8300 COLOR ROA for framebuffer-fetch pipelines; requires powervr_probe and powervr_metal"
+        type: boolean
+        default: false
+      keep_minutes:
+        description: Minutes the runner stays after the first build (1 to 330)
+        required: true
+        default: "330"
+
+permissions:
+  contents: write
+  statuses: write
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: mouseos/UniXNU-a04br3
+          ref: ${{ inputs.device_ref }}
+          path: device
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install host tools
+        run: |
+          brew install cmake ninja unifdef llvm mtools dtc
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix unifdef)/bin" >> "$GITHUB_PATH"
+
+      - name: Install PowerVR Vulkan host tools
+        if: ${{ inputs.powervr_probe && inputs.powervr_metal }}
+        run: |
+          set -euo pipefail
+          brew install pkgconf bison flex spirv-llvm-translator spirv-tools
+          for formula in bison flex llvm; do
+            echo "$(brew --prefix "$formula")/bin" >> "$GITHUB_PATH"
+          done
+          for formula in spirv-llvm-translator spirv-tools llvm; do
+            prefix="$(brew --prefix "$formula")"
+            export PKG_CONFIG_PATH="$prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          done
+          pkg-config --exists LLVMSPIRVLib SPIRV-Tools
+          pkg-config --modversion LLVMSPIRVLib SPIRV-Tools
+
+      # Only public Cargo dependencies and the open-source bridge's target directory.
+      # No SDK, owner data, firmware, trust cache, environment or credential files.
+      - name: Identify the Rust cache toolchain and inputs
+        id: rust_cache_key
+        if: ${{ inputs.powervr_probe && inputs.powervr_metal }}
+        continue-on-error: true
+        env:
+          CACHE_OS: ${{ runner.os }}
+          CACHE_ARCH: ${{ runner.arch }}
+          CACHE_RUN: ${{ github.run_id }}
+          CACHE_ATTEMPT: ${{ github.run_attempt }}
+          CACHE_INPUTS: ${{ hashFiles('scripts/data/gpu-metal-vulkan-inputs.json', 'scripts/build-native-metal-bridge.py', 'drivers/NativeMetal/bridge/**', 'device/scripts/a04br3-pre-build.sh', 'device/scripts/build-a04br3-metal-plugin.py') }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PYTHON'
+          import json, os, re, subprocess
+          from pathlib import Path
+          for name in ('scripts/data/gpu-metal-vulkan-inputs.json',
+                       'scripts/build-native-metal-bridge.py',
+                       'drivers/NativeMetal/bridge/NativeMetalBridge.rs',
+                       'drivers/NativeMetal/bridge/NativeMetalObjects.rs',
+                       'device/scripts/a04br3-pre-build.sh',
+                       'device/scripts/build-a04br3-metal-plugin.py'):
+              if not Path(name).is_file():
+                  raise SystemExit('Missing Rust cache input: ' + name)
+          pin = json.loads(Path('scripts/data/gpu-metal-vulkan-inputs.json').read_text())['translator']['commit']
+          if not re.fullmatch(r'[0-9a-f]{40}', pin):
+              raise SystemExit('Invalid translator pin')
+          digest = os.environ['CACHE_INPUTS']
+          if not re.fullmatch(r'[0-9a-f]{64}', digest):
+              raise SystemExit('Empty or invalid Rust cache input hash')
+          version = subprocess.check_output(['xcodebuild', '-version'], text=True)
+          build = re.search(r'^Build version ([A-Za-z0-9._-]+)$', version, re.M)
+          if not build:
+              raise SystemExit('Selected Xcode build is unknown')
+          sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-build-version'], text=True).strip()
+          if not re.fullmatch(r'[A-Za-z0-9._-]+', sdk):
+              raise SystemExit('Selected iPhoneOS SDK build is unknown')
+          for name in ('CACHE_OS', 'CACHE_ARCH', 'CACHE_RUN', 'CACHE_ATTEMPT'):
+              if not re.fullmatch(r'[A-Za-z0-9._-]+', os.environ[name]):
+                  raise SystemExit('Invalid cache key component: ' + name)
+          compatible = (f"a04br3-rust-v1-{os.environ['CACHE_OS']}-{os.environ['CACHE_ARCH']}"
+                        f"-xcode{build[1]}-iossdk{sdk}-rust1.98.0-")
+          source = compatible + digest + '-'
+          # Caches are immutable: each completed attempt may improve a partial cache.
+          key = source + os.environ['CACHE_RUN'] + '-' + os.environ['CACHE_ATTEMPT']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'key={key}\nsource_prefix={source}\ncompatible_prefix={compatible}\n')
+          PYTHON
+
+      - name: Restore public Rust dependencies and bridge build
+        uses: actions/cache/restore@v4
+        if: ${{ inputs.powervr_probe && inputs.powervr_metal && steps.rust_cache_key.outputs.key != '' }}
+        continue-on-error: true
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            out/a04br3/tree/build/m2v-target
+          key: ${{ steps.rust_cache_key.outputs.key }}
+          restore-keys: |
+            ${{ steps.rust_cache_key.outputs.source_prefix }}
+            ${{ steps.rust_cache_key.outputs.compatible_prefix }}
+
+      - name: Start the SSH session
+        id: ssh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl -fL https://github.com/owenthereal/upterm/releases/download/v0.38.0/upterm_darwin_arm64.tar.gz -o "$RUNNER_TEMP/upterm.tar.gz"
+          echo "8258498167a8e7671680699f765c4cdf6814fe957256ac3fc7452cbd5ad1366f  $RUNNER_TEMP/upterm.tar.gz" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/upterm-bin"
+          tar -xzf "$RUNNER_TEMP/upterm.tar.gz" -C "$RUNNER_TEMP/upterm-bin"
+          echo "$RUNNER_TEMP/upterm-bin" >> "$GITHUB_PATH"
+          echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINyHbBUx9HvSf7kVU7pfCNtFBAt4O7o30hpFrBEANRzP a04br3-debug' > "$RUNNER_TEMP/authorized_keys"
+          "$RUNNER_TEMP/upterm-bin/upterm" host --server wss://uptermd.upterm.dev --detach --accept --skip-host-key-check --name a04br3 \
+            --authorized-keys "$RUNNER_TEMP/authorized_keys" --force-command "bash --noprofile --norc -i" -o json -- sleep 21000 > "$RUNNER_TEMP/ssh-session.json"
+          python3 - <<'PYTHON'
+          import json, os, subprocess
+          command = json.load(open(os.environ['RUNNER_TEMP'] + '/ssh-session.json'))['sshCommand']
+          subprocess.run(['gh', 'api', '--method', 'POST', f"repos/{os.environ['GITHUB_REPOSITORY']}/statuses/{os.environ['GITHUB_SHA']}",
+                          '-f', 'state=pending', '-f', 'context=a04br3/ssh', '-f', f'description={command[:140]}'], check=True,
+                         stdout=subprocess.DEVNULL)
+          print(command)
+          PYTHON
+
+      - name: Environment and rebuild script for the SSH session
+        env:
+          UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
+          GH_TOKEN: ${{ github.token }}
+          A04BR3_POWERVR_METAL_MODE: ${{ inputs.powervr_metal_mode || 'selftest' }}
+          A04BR3_POWERVR_METAL_ROA_COLOR: ${{ inputs.powervr_metal_roa_color && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          if [ "$A04BR3_POWERVR_METAL_ROA_COLOR" = 1 ] && { [ "${{ inputs.powervr_probe }}" != true ] || [ "${{ inputs.powervr_metal }}" != true ]; }; then
+            echo 'powervr_metal_roa_color requires powervr_probe=true and powervr_metal=true' >&2
+            exit 1
+          fi
+          umask 077
+          {
+            echo "export PATH='$PATH'"
+            echo "export UNIQUE_CHIP_ID='$UNIQUE_CHIP_ID'"
+            echo "export GH_TOKEN='$GH_TOKEN' GITHUB_TOKEN='$GH_TOKEN'"
+            echo "export GITHUB_WORKSPACE='$GITHUB_WORKSPACE' RUNNER_TEMP='$RUNNER_TEMP' GITHUB_REPOSITORY='$GITHUB_REPOSITORY'"
+            echo "export RELEASE=a04br3-ssh-${{ github.run_id }}"
+            echo "export A04BR3_DEVICE_REF='$(git -C device rev-parse HEAD)'"
+            echo "export A04BR3_POWERVR_METAL_MODE='$A04BR3_POWERVR_METAL_MODE'"
+            echo "export A04BR3_POWERVR_METAL_ROA_COLOR='$A04BR3_POWERVR_METAL_ROA_COLOR'"
+            echo 'METAL_KERNEL_ARGS=()'
+            if [ "$A04BR3_POWERVR_METAL_MODE" = publish ]; then
+              echo 'METAL_KERNEL_ARGS=(--kernel-arg sheng-fb-gpu=1)'
+            fi
+            if [ "${{ inputs.skip_setup }}" = "true" ]; then echo "export SKIP_SETUP_ARG=--skip-setup"; else echo "export SKIP_SETUP_ARG="; fi
+            if [ "${{ inputs.powervr_probe }}" = "true" ]; then
+              echo "export A04BR3_POWERVR_PROBE=1 TRUST_CACHE_ARG=--owner-trust-cache"
+              if [ "${{ inputs.powervr_metal }}" = "true" ]; then echo "export A04BR3_POWERVR_VULKAN=1 A04BR3_POWERVR_METAL=1"; fi
+            else
+              echo "export TRUST_CACHE_ARG=--trust-cache"
+            fi
+            echo "cd '$GITHUB_WORKSPACE'"
+          } > "$RUNNER_TEMP/a04br3.env"
+          cat > /tmp/a04br3-rebuild.sh <<'SCRIPT'
+          #!/bin/bash
+          # /tmp/a04br3-rebuild.sh <UniXNU-a04br3 ref>: incremental kernel and payload of that ref, published to $RELEASE.
+          set -euo pipefail
+          source "$RUNNER_TEMP/a04br3.env"
+          [ -f "$RUNNER_TEMP/a04br3-data.env" ] && source "$RUNNER_TEMP/a04br3-data.env"
+          git -C device fetch -q origin
+          git -C device checkout -q --detach "${1:-$A04BR3_DEVICE_REF}"
+          ./unixnu tree -D "$GITHUB_WORKSPACE/device"
+          # User-space probes and their owner trust cache are inputs too. Reuse the
+          # existing dependency builds, but stage the newly checked-out sources.
+          export DEVICE_DIR="$GITHUB_WORKSPACE/device"
+          A04BR3_REUSE_DATA_SEED=1 bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"
+          source "$RUNNER_TEMP/a04br3-data.env"
+          ./unixnu build kernel
+          ./unixnu build payload $TRUST_CACHE_ARG "$RUNNER_TEMP/trustcache" --data-ramdisk "$RUNNER_TEMP/data.dbr" --unique-chip-id "$UNIQUE_CHIP_ID" $SKIP_SETUP_ARG ${METAL_KERNEL_ARGS[@]+"${METAL_KERNEL_ARGS[@]}"}
+          tag="$(git -C device rev-parse --short HEAD)"
+          cp out/a04br3/payload/payload.img "$RUNNER_TEMP/payload-$tag.img"
+          gh release upload "$RELEASE" "$RUNNER_TEMP/payload-$tag.img" --clobber -R "$GITHUB_REPOSITORY"
+          echo "PUBLISHED payload-$tag.img"
+          SCRIPT
+          chmod +x /tmp/a04br3-rebuild.sh
+          gh release create "a04br3-ssh-${{ github.run_id }}" --title "a04br3 SSH build ${{ github.run_id }}" \
+            --notes "Payloads of the a04br3 SSH incremental build (development, not a release)." --prerelease --target "$GITHUB_SHA"
+
+      - name: First build
+        id: first
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
+          DEVICE_DIR: ${{ github.workspace }}/device
+          GH_TOKEN: ${{ github.token }}
+          A04BR3_POWERVR_METAL_MODE: ${{ inputs.powervr_metal_mode || 'selftest' }}
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/a04br3.env"
+          ./unixnu defconfig a04br3_defconfig -D "$DEVICE_DIR"
+          ./unixnu fetch xnu libplatform libdispatch AvailabilityVersions libpthread corecrypto-2023 IOStorageFamily -D "$DEVICE_DIR"
+          bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"
+          echo "export XNU_OWNER_DATA_VOLUME_UUID=$(sed -n 's/^XNU_OWNER_DATA_VOLUME_UUID=//p' "$GITHUB_ENV" | tail -1)" > "$RUNNER_TEMP/a04br3-data.env"
+          source "$RUNNER_TEMP/a04br3-data.env"
+          ./unixnu build kernel
+          ./unixnu build payload $TRUST_CACHE_ARG "$RUNNER_TEMP/trustcache" --data-ramdisk "$RUNNER_TEMP/data.dbr" --unique-chip-id "$UNIQUE_CHIP_ID" $SKIP_SETUP_ARG ${METAL_KERNEL_ARGS[@]+"${METAL_KERNEL_ARGS[@]}"}
+          tag="$(git -C device rev-parse --short HEAD)"
+          cp out/a04br3/payload/payload.img "$RUNNER_TEMP/payload-$tag.img"
+          gh release upload "a04br3-ssh-${{ github.run_id }}" "$RUNNER_TEMP/payload-$tag.img" --clobber
+          echo "PUBLISHED payload-$tag.img"
+
+      # First build is synchronous. Do not snapshot an orphaned compiler or an
+      # SSH rebuild; partial output after a failed, completed build is reusable.
+      - name: Check that the Rust cache is idle
+        id: rust_cache_idle
+        if: ${{ !cancelled() && steps.rust_cache_key.outputs.key != '' && (steps.first.outcome == 'success' || steps.first.outcome == 'failure') }}
+        continue-on-error: true
+        run: |
+          python3 - <<'PYTHON'
+          import os, subprocess
+          checks = (['pgrep', '-x', 'cargo'], ['pgrep', '-x', 'rustc'],
+                    ['pgrep', '-f', '[m]2v-target'])
+          # A pgrep error also skips saving rather than guessing that compilation ended.
+          idle = all(subprocess.run(command, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL).returncode == 1 for command in checks)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('idle=' + str(idle).lower() + '\n')
+          if not idle:
+              print('Rust cache save skipped: compilation is active or could not be checked')
+          PYTHON
+
+      - name: Save public Rust dependencies and bridge build
+        uses: actions/cache/save@v4
+        if: ${{ !cancelled() && steps.rust_cache_idle.outputs.idle == 'true' && steps.rust_cache_key.outputs.key != '' && (steps.first.outcome == 'success' || steps.first.outcome == 'failure') }}
+        continue-on-error: true
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            out/a04br3/tree/build/m2v-target
+          key: ${{ steps.rust_cache_key.outputs.key }}
+
+      - name: Keep the runner for SSH rebuilds
+        # Retain a live SSH session after build failure, not a failed checkout/bootstrap.
+        if: ${{ !cancelled() && steps.ssh.outcome == 'success' }}
+        env:
+          KEEP_MINUTES: ${{ inputs.keep_minutes }}
+        run: |
+          case "$KEEP_MINUTES" in ''|*[!0-9]*) exit 2;; esac
+          deadline=$((SECONDS + KEEP_MINUTES * 60))
+          while [ ! -f /tmp/a04br3-done ] && [ "$SECONDS" -lt "$deadline" ]; do sleep 60; done
+          "$RUNNER_TEMP/upterm-bin/upterm" session stop a04br3 || true
+
+      # Keep SSH available after a failed build, but do not report an empty release as a successful run.
+      - name: Report first build failure
+        if: ${{ !cancelled() && steps.first.outcome == 'failure' }}
+        run: |
+          echo "::error::First build failed; see the First build log. The SSH retention period has ended."
+          exit 1
+
+      - name: Remove proprietary inputs
+        if: always()
+        run: |
+          rm -rf out/ipsw out/feeds device/.cache/firmware out/*/tree/.cache/firmware "$RUNNER_TEMP"/*.img
+          rm -f "$RUNNER_TEMP/trustcache" "$RUNNER_TEMP/data.dbr" "$RUNNER_TEMP/a04br3.env"

@@ -147,7 +147,9 @@ def build_archives(ctx, env):
 
 def build(ctx, modules):
     log('kernel: XNU')
-    script = ctx.tree / 'scripts/build-xnu-4k-baseline.sh'
+    # Keep the schema-1 archive names and patch contract while format 2 uses catalog paths.
+    script_name = 'build-xnu-schema1-baseline.sh' if ctx.schema_version == 1 else 'build-xnu-4k-baseline.sh'
+    script = ctx.tree / 'scripts' / script_name
     if not script.is_file():
         raise Error(f'{script} missing')
     env = dict(os.environ)
@@ -167,6 +169,13 @@ def build(ctx, modules):
         generated.mkdir(parents=True, exist_ok=True)
         env['UNIXNU_GENERATED_DIR'] = str(generated)
     env['JOBS'] = str(ctx.jobs)
+    # The kernelcache and slide this board prelinks against: the static storage interface record
+    # (scripts/data/native-storage-interface-audit.json) may only bind drivers for the same pair.
+    prelink_spec = ctx.board.get('kernel', {}).get('prelink') or {}
+    if prelink_spec.get('kernelcache_sha256'):
+        env['UNIXNU_PRELINK_KERNELCACHE_SHA256'] = prelink_spec['kernelcache_sha256']
+    if prelink_spec.get('slide') is not None:
+        env['UNIXNU_PRELINK_SLIDE'] = str(prelink_spec['slide'])
     record = ctx.tree / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/startup.o.json'
     if not record.is_file():
         # The archive builders and the boot progress layer read compile records of the XNU build, which only an earlier

@@ -27,6 +27,16 @@ def fetch(url):
         return response.read()
 
 
+def fetch(url):
+    """GET url; with GITHUB_TOKEN set (the Actions token) the GitHub API counts the request against that token instead of the
+    small anonymous per-IP quota that shared runners exhaust (HTTP 403 rate limit exceeded)."""
+    request = urllib.request.Request(url)
+    token = os.environ.get('GITHUB_TOKEN')
+    if token and url.startswith('https://api.github.com/'):
+        request.add_header('Authorization', 'Bearer ' + token)
+    return urllib.request.urlopen(request, timeout=30).read()
+
+
 def restore(entry, destination=DESTINATION, tag=TAG):
     if entry['type'] != 'file' or not entry['name'].endswith('.h'):
         return None
