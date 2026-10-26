@@ -121,3 +121,41 @@ The device tree and the platform drivers supply the hardware description. The us
 - [Boot arguments](/xnu/boot-arguments) lists the kernel arguments.
 - [Troubleshooting](/reference/troubleshooting) lists failure conditions and checks.
 - [Devices](/devices/) lists device specific commands.
+
+### Optional loader memory-map diagnostics
+
+DarwinBoot defaults `DARWINBOOT_MEMORY_MAP_DIAG` to 0. A device diagnostic
+configuration may set `DARWINBOOT_MEMORY_MAP_DIAG = "1"` in its existing
+`[firmware.defines]` table. The official firmware builder forwards that value
+as an EDK II build define. The platform DSC must include
+`DarwinBootPkg/Driver/DarwinBoot.dsc.inc` inside `[Components]` in place of the
+plain DarwinBoot INF entry. This forwards the compiler define only to DarwinBoot.
+The standalone DarwinBoot DSC also uses that include. Other values remain off.
+No board default is changed by the generic implementation.
+
+When enabled, `DBMM pre` records describe the already acquired map immediately
+before the allocation search; `DBMM final` records describe each successful
+GetMemoryMap immediately before its ExitBootServices attempt. Raw records carry
+index, EFI type, physical/virtual start, page count and attributes. They do not
+classify ownership or declare usable RAM. Invalid maps are labelled; output is
+capped at 1024 descriptors per snapshot with an explicit `TRUNCATED` marker.
+Every record is below 200 bytes. Output bypasses the UEFI console and uses the
+platform's SerialPortLib; that instance must not allocate or call boot services.
+The standalone DSC binds a null serial library, so an appropriate platform
+binding is required to capture output. No SerialPortInitialize call is added.
+
+The diagnostic itself uses stack storage only and does not allocate/free pages,
+change reservations or boot arguments, or extend the owned window. Serial output
+adds time and is not suitable as a performance baseline. A complete final map
+and a successful allocation are needed before claiming a larger usable window;
+adding `MemorySizeActual` alone does not add managed pages.
+
+Host checks (no firmware/hardware execution):
+
+```sh
+python3 scripts/check-darwinboot-memory-map.py
+python3 scripts/check-darwinboot-memory-map-build.py --edk2-source /absolute/path/to/pinned-mu_basecore
+```
+
+The second check verifies the checkout revision against the official `edk2`
+source pin in `feeds.toml` before exercising the real DSC parser.
