@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: mouseos/UniXNU-a04br3
-          ref: b77365072a2447f688d37de5b08e941f801b1298
+          ref: fd164037aa30ef6c97abddbedc9af00f32169092
           path: device-schema2
           submodules: recursive
       - uses: actions/setup-python@v5
@@ -33,26 +33,14 @@ jobs:
         run: |
           SOC_DIR=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["profiles"]["soc"])' "$RUNNER_TEMP/schema2-status.json")
           test "$(git -C "$SOC_DIR" rev-parse HEAD)" = 545fa1f158afce62e72ead473c951273929eaca8
-          python3 device-schema2/scripts/tests/check_schema2_contract.py --unixnu "$PWD" --soc "$SOC_DIR" --out "$RUNNER_TEMP/schema2-contract"
-          python3 device-schema2/scripts/tests/check_schema2_build_bindings.py --tree "$RUNNER_TEMP/schema2-contract/a04br3/ipados-17.7.11-21H461/a04br3/tree"
-          python3 scripts/porting-record.py check --device device-schema2
-          python3 device-schema2/scripts/tests/check_schema2_prebuild_layout.py
-          python3 device-schema2/scripts/tests/test_a04br3_pre_build_seed_reuse.py
-          python3 -m unittest discover -s device-schema2/scripts/tests -p test_flash_validation.py
-          python3 device-schema2/scripts/tests/test_a04br3_autoreset_panic.py
-          python3 device-schema2/scripts/tests/test_a04br3_charger.py
-          python3 device-schema2/scripts/tests/test_a04br3_charger_handoff_api.py
-          python3 device-schema2/scripts/tests/check_pvr_buffer_rows.py
-          python3 scripts/tests/test_a04br3_ssh_profile.py
-          python3 scripts/tests/test_kernel_output_root.py
-          python3 scripts/tests/test_adt_migration_overrides.py
-          python3 scripts/tests/test_payload_volume.py
-          python3 scripts/check-unixnu.py
+          python3 device-schema2/scripts/check-schema2-host.py --unixnu "$PWD" --soc "$SOC_DIR" --out "$RUNNER_TEMP/schema2-host"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: schema2-host-contract
           path: |
             ${{ runner.temp }}/schema2-status.json
-            ${{ runner.temp }}/schema2-contract/*.json
-            ${{ runner.temp }}/schema2-contract/a04br3/ipados-17.7.11-21H461/a04br3/device-tree/hardware.dtb
+            ${{ runner.temp }}/schema2-host/host-results.json
+            ${{ runner.temp }}/schema2-host/logs/*.log
+            ${{ runner.temp }}/schema2-host/contract/*.json
+            ${{ runner.temp }}/schema2-host/contract/a04br3/ipados-17.7.11-21H461/a04br3/device-tree/hardware.dtb
