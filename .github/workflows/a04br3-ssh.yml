@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       device_ref:
-        description: UniXNU-a04br3 ref
+        description: "UniXNU-a04br3 ref (RAM600-compatible WIP pin; hardware qualification pending)"
         required: true
-        default: main
+        default: dde2dab72621c02696857abc12b29977cdc447a2
       skip_setup:
         description: "Mark Setup done and skip the first-boot data migration in the Data seed (board skip_setup_tool, docs/guide/skip-setup.md), as macos.yml"
         type: boolean
@@ -31,6 +31,10 @@ on:
           - selftest
           - publish
         default: selftest
+      powervr_metal_roa_color:
+        description: "Experimental GE8300 COLOR ROA for framebuffer-fetch pipelines; requires powervr_probe and powervr_metal"
+        type: boolean
+        default: false
       keep_minutes:
         description: Minutes the runner stays after the first build (1 to 330)
         required: true
@@ -175,8 +179,13 @@ jobs:
           UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
           GH_TOKEN: ${{ github.token }}
           A04BR3_POWERVR_METAL_MODE: ${{ inputs.powervr_metal_mode || 'selftest' }}
+          A04BR3_POWERVR_METAL_ROA_COLOR: ${{ inputs.powervr_metal_roa_color && '1' || '0' }}
         run: |
           set -euo pipefail
+          if [ "$A04BR3_POWERVR_METAL_ROA_COLOR" = 1 ] && { [ "${{ inputs.powervr_probe }}" != true ] || [ "${{ inputs.powervr_metal }}" != true ]; }; then
+            echo 'powervr_metal_roa_color requires powervr_probe=true and powervr_metal=true' >&2
+            exit 1
+          fi
           umask 077
           {
             echo "export PATH='$PATH'"
@@ -184,7 +193,9 @@ jobs:
             echo "export GH_TOKEN='$GH_TOKEN' GITHUB_TOKEN='$GH_TOKEN'"
             echo "export GITHUB_WORKSPACE='$GITHUB_WORKSPACE' RUNNER_TEMP='$RUNNER_TEMP' GITHUB_REPOSITORY='$GITHUB_REPOSITORY'"
             echo "export RELEASE=a04br3-ssh-${{ github.run_id }}"
+            echo "export A04BR3_DEVICE_REF='$(git -C device rev-parse HEAD)'"
             echo "export A04BR3_POWERVR_METAL_MODE='$A04BR3_POWERVR_METAL_MODE'"
+            echo "export A04BR3_POWERVR_METAL_ROA_COLOR='$A04BR3_POWERVR_METAL_ROA_COLOR'"
             echo 'METAL_KERNEL_ARGS=()'
             if [ "$A04BR3_POWERVR_METAL_MODE" = publish ]; then
               echo 'METAL_KERNEL_ARGS=(--kernel-arg sheng-fb-gpu=1)'
@@ -205,7 +216,7 @@ jobs:
           source "$RUNNER_TEMP/a04br3.env"
           [ -f "$RUNNER_TEMP/a04br3-data.env" ] && source "$RUNNER_TEMP/a04br3-data.env"
           git -C device fetch -q origin
-          git -C device checkout -q --detach "${1:-origin/main}"
+          git -C device checkout -q --detach "${1:-$A04BR3_DEVICE_REF}"
           ./unixnu tree -D "$GITHUB_WORKSPACE/device"
           # User-space probes and their owner trust cache are inputs too. Reuse the
           # existing dependency builds, but stage the newly checked-out sources.
