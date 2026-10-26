@@ -8,14 +8,19 @@ permissions:
 jobs:
   contract:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools-schema2
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: b209e8b37ee41148ae43e447997683bbc0f6a97d
+          path: tools-schema2
           submodules: recursive
       - uses: actions/checkout@v4
         with:
           repository: mouseos/UniXNU-a04br3
-          ref: fd164037aa30ef6c97abddbedc9af00f32169092
+          ref: aebd24bcc9dc3cb45a02bf0ac67e3000d0a243a8
           path: device-schema2
           submodules: recursive
       - uses: actions/setup-python@v5
@@ -25,15 +30,15 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y device-tree-compiler mtools
       - name: Resolve pinned sources and assemble the tree
         run: |
-          ./unixnu defconfig a04br3_defconfig -D "$PWD/device-schema2" --out "$RUNNER_TEMP/schema2"
-          ./unixnu fetch mt8167 -D "$PWD/device-schema2" --out "$RUNNER_TEMP/schema2"
-          ./unixnu tree -D "$PWD/device-schema2" --out "$RUNNER_TEMP/schema2"
-          ./unixnu status --json -D "$PWD/device-schema2" --out "$RUNNER_TEMP/schema2" > "$RUNNER_TEMP/schema2-status.json"
+          ./unixnu defconfig a04br3_defconfig -D "$GITHUB_WORKSPACE/device-schema2" --out "$RUNNER_TEMP/schema2"
+          ./unixnu fetch mt8167 -D "$GITHUB_WORKSPACE/device-schema2" --out "$RUNNER_TEMP/schema2"
+          ./unixnu tree -D "$GITHUB_WORKSPACE/device-schema2" --out "$RUNNER_TEMP/schema2"
+          ./unixnu status --json -D "$GITHUB_WORKSPACE/device-schema2" --out "$RUNNER_TEMP/schema2" > "$RUNNER_TEMP/schema2-status.json"
       - name: Check actual archives, DTS and ADT contracts
         run: |
           SOC_DIR=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["profiles"]["soc"])' "$RUNNER_TEMP/schema2-status.json")
           test "$(git -C "$SOC_DIR" rev-parse HEAD)" = 545fa1f158afce62e72ead473c951273929eaca8
-          python3 device-schema2/scripts/check-schema2-host.py --unixnu "$PWD" --soc "$SOC_DIR" --out "$RUNNER_TEMP/schema2-host"
+          python3 "$GITHUB_WORKSPACE/device-schema2/scripts/check-schema2-host.py" --unixnu "$PWD" --soc "$SOC_DIR" --out "$RUNNER_TEMP/schema2-host"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
