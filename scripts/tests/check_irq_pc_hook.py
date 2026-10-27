@@ -3,6 +3,7 @@
 from pathlib import Path
 import argparse
 import subprocess
+import os
 import tempfile
 
 root=Path(__file__).resolve().parents[2]
@@ -37,3 +38,13 @@ with tempfile.TemporaryDirectory(prefix='irq-pc-hook-') as tmp:
                   f'-DXNU_IRQ_PC_STATS={mode}',str(c),'-o',str(b)],check=True)
   subprocess.run([str(b)],check=True)
 print('PASS: pinned timer patch applies; enabled and disabled hook fixtures')
+
+# XNU's per-target variable must preserve its own += additions and must not
+# affect another target. Exercise the actual GNU make expansion shape.
+with tempfile.TemporaryDirectory(prefix='irq-pc-make-') as tmp:
+    m=Path(tmp)/'Makefile'
+    m.write_text('rtclock.o_CFLAGS_ADD += -DOTHER_FLAG=1\nall: rtclock.o other.o\nrtclock.o other.o:\n\t@printf "%s:%s\\n" "$@" "$($@_CFLAGS_ADD)"\n')
+    env={**os.environ,'rtclock.o_CFLAGS_ADD':'-DXNU_IRQ_PC_STATS=1'}
+    lines=subprocess.check_output(['make','-f',str(m)],text=True,env=env).splitlines()
+    assert lines == ['rtclock.o:-DXNU_IRQ_PC_STATS=1 -DOTHER_FLAG=1','other.o:'], lines
+print('PASS: per-object make flag preserves target additions and excludes unrelated object')
