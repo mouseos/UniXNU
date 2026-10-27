@@ -878,9 +878,9 @@ from pathlib import Path
 import sys
 out = Path('build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837')
 stamp = out / '.ipi-signal-stats-mode'
-mode = sys.argv[1]
+mode = 'ast-callers-v1:' + sys.argv[1]
 if not stamp.exists() or stamp.read_text() != mode:
-    for relative in ('osfmk/DEVELOPMENT/cpu_common.o', 'mach.development.bcm2837.unstripped.noctf'):
+    for relative in ('osfmk/DEVELOPMENT/cpu_common.o', 'osfmk/DEVELOPMENT/machine_routines.o', 'mach.development.bcm2837.unstripped.noctf'):
         (out / relative).unlink(missing_ok=True)
     out.mkdir(parents=True, exist_ok=True)
     stamp.write_text(mode)
