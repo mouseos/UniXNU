@@ -57,16 +57,12 @@ identifier = args.identifier or 'org.unixnu.' + args.name
 driver_identifier = args.driver_identifier or 'org.unixnu.' + Path(driver_name).stem
 
 OUT = (args.out or ROOT / 'build/vulkan-metal-plugin' / args.name).resolve()
-if OUT.exists():
-    shutil.rmtree(OUT)
-bundle = OUT / (args.name + '.bundle')
-bundle.mkdir(parents=True)
 BRIDGE = ROOT / 'build/native-metal-bridge/ios/libnative_metal_bridge.a'
 if not (args.skip_bridge and BRIDGE.is_file()):
     subprocess.run(['python3', ROOT / 'scripts/build-native-metal-bridge.py', '--target', 'ios'] +
                    (['--portable-sha2'] if args.portable_sha2 else []) +
                    (['--runtime-commit-trace'] if args.runtime_commit_trace else []), check=True)
-elif args.portable_sha2 or args.runtime_commit_trace:
+else:
     import hashlib
     record = BRIDGE.with_suffix('.json')
     metadata = json.loads(record.read_text()) if record.is_file() else {}
@@ -78,6 +74,10 @@ elif args.portable_sha2 or args.runtime_commit_trace:
         raise SystemExit('Existing bridge is not portable SHA2; rebuild without --skip-bridge')
     if metadata.get('runtime_commit_trace', False) != args.runtime_commit_trace:
         raise SystemExit('Existing bridge has a different commit trace feature; rebuild without --skip-bridge')
+if OUT.exists():
+    shutil.rmtree(OUT)
+bundle = OUT / (args.name + '.bundle')
+bundle.mkdir(parents=True)
 sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
 base = ['-target', 'arm64-apple-ios17.0', '-isysroot', sdk, '-O2', '-g', '-Wall', '-Wextra', '-Werror', '-fstack-protector-strong']
 includes = ['-I', str(ROOT / 'drivers/NativeMetal')]
