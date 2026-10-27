@@ -17,8 +17,8 @@ for extra,omitted in [(['home=0'],['home']),([],['home=60']),([],['home other'])
  try:kernel_arguments(board,extra,omitted)
  except Error:pass
  else:raise AssertionError((extra,omitted))
-assert len(check_args(['x'*1000])) == 1000
-try:check_args(['x'*1001])
+assert len(check_args(['x'*1023])) == 1023
+try:check_args(['x'*1024])
 except Error:pass
 else:raise AssertionError('command line cap lost')
 print('PASS real payload argument defaults, override precedence, exact omissions, conflicts, validation, unchanged board and command-line cap')
