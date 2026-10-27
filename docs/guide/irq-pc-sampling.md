@@ -19,3 +19,14 @@ Check the patch against the pinned XNU source and both feature gates with:
 `python3 scripts/tests/check_irq_pc_hook.py --xnu-source /path/to/pinned/xnu`.
 A host fixture does not establish a real XNU compile, interrupt behavior,
 representative sampling, or hardware safety.
+
+The optional `native_irq_correlation_sample` weak observer receives user PCs
+unchanged and kernel PCs unslid, with the explicit mode. It is compiled out by
+the same default-off flag. The existing observer's user-PC suppression remains
+unchanged. A board must independently gate and bound any recording of addresses;
+user PCs can expose ASLR-sensitive information in diagnostic output.
+
+The capability function is defined in both builds and returns 0 when disabled,
+1 when enabled. This is required for kernels that reject unresolved weak imports
+at link time. The observer declarations and calls remain absent in the disabled
+object; the capability function does not enable sampling.
