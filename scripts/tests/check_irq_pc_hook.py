@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix='irq-pc-make-') as tmp:
     m=Path(tmp)/'Makefile'
     m.write_text('rtclock.o_CFLAGS_ADD += -DOTHER_FLAG=1\n'
                  'ifneq ($(XNU_IRQ_PC_STATS),)\n'
-                 'rtclock.o_CFLAGS_ADD += -DXNU_IRQ_PC_STATS=$(XNU_IRQ_PC_STATS)\n'
+                 'override rtclock.o_CFLAGS_ADD += -DXNU_IRQ_PC_STATS=$(XNU_IRQ_PC_STATS)\n'
                  'endif\nall:\n\t@$(MAKE) -f $(firstword $(MAKEFILE_LIST)) child;\n'
                  'child: rtclock.o other.o\nrtclock.o other.o:\n'
                  '\t@printf "%s:%s\\n" "$@" "$($@_CFLAGS_ADD)"\n')
@@ -55,6 +55,9 @@ with tempfile.TemporaryDirectory(prefix='irq-pc-make-') as tmp:
         env={**os.environ,'XNU_IRQ_PC_STATS':mode}
         output=subprocess.check_output(['make','--no-print-directory','-f',str(m)],text=True,env=env).splitlines()
         assert output == [f'rtclock.o:-DOTHER_FLAG=1 -DXNU_IRQ_PC_STATS={mode}','other.o:'], output
+    env={**os.environ,'XNU_IRQ_PC_STATS':'1'}
+    output=subprocess.check_output(['make','--no-print-directory','-f',str(m),'rtclock.o_CFLAGS_ADD=-DCALLER=1'],text=True,env=env).splitlines()
+    assert output == ['rtclock.o:-DCALLER=1 -DXNU_IRQ_PC_STATS=1','other.o:'], output
 print('PASS: IRQ mode survives shell and recursive make, preserves other per-object flags')
 
 # Use the actual added declarations, including the capability function, with

@@ -6,7 +6,7 @@
  C_RULE_0=@$(LOG_CC) "$@"
 +# Keep optional IRQ sampling local to rtclock.o while preserving other per-object flags.
 +ifneq ($(XNU_IRQ_PC_STATS),)
-+rtclock.o_CFLAGS_ADD += -DXNU_IRQ_PC_STATS=$(XNU_IRQ_PC_STATS)
++override rtclock.o_CFLAGS_ADD += -DXNU_IRQ_PC_STATS=$(XNU_IRQ_PC_STATS)
 +endif
 +
  C_RULE_1A=$(_v)$(KCC) -c $(filter-out $($@_CFLAGS_RM), $(CFLAGS) $(CWARNFLAGS)) -MD -MF $(@:o=d) -MJ $(@:o=o.json) -MP $($@_CFLAGS_ADD) $($@_CWARNFLAGS_ADD) $(INCFLAGS) $($@_INCFLAGS)
