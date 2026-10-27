@@ -30,3 +30,9 @@ The capability function is defined in both builds and returns 0 when disabled,
 1 when enabled. This is required for kernels that reject unresolved weak imports
 at link time. The observer declarations and calls remain absent in the disabled
 object; the capability function does not enable sampling.
+
+The same opt-in timer hook also calls the optional weak `native_live_pc_sample`
+observer, passing the interrupted user PC and user LR, or the unslid kernel PC
+and an unavailable (zero) LR. A board must separately opt into recording. These
+are timer-interrupt samples, not saved scheduler state or a full profiler; the
+hook does not establish image identity or CPU-time fractions. ARM64 only.
