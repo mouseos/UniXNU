@@ -38,11 +38,18 @@ python3 scripts/build-a04br3-metal-plugin.py \
   --skip-bridge --pipeline-failure-diag --buffer-rows
 ```
 
-`--pipeline-failure-diag` also enables the existing first-four-frame top-400-row
-CPU readback before `COMPLETE_SWAP`. P28 timed out before retirement with that
-diagnostic enabled; its readback duration is unmeasured. Encoder timing and the
-readback are therefore not independent in this configuration. Do not infer a
-normal-path failure or mask/extend the timeout from that observation.
+`--pipeline-failure-diag` also enables first-four-frame top-400-row verification.
+P28 used an earlier implementation that read the live mapping on the CPU before
+`COMPLETE_SWAP` and timed out before retirement; its readback duration was not
+measured. In this source revision, a GPU snapshot copy still runs before
+`COMPLETE_SWAP`, while CPU comparison of the snapshot runs asynchronously after
+successful completion. Its timing and effect on the timeout are unmeasured.
+The snapshot capture waits for GPU completion without a separate deadline while
+holding the swap lease. A stall there can still prevent retirement. The `0x6731`
+marker indicates that the display copy returned, before snapshot capture.
+GPU-to-CPU snapshot visibility on the target has not been established.
+Encoder timing and verification are not independent in this configuration.
+Do not infer a normal-path failure or mask/extend the timeout from P28.
 
 `--skip-bridge` is safe only after verifying the immediately preceding bridge
 archive's hash and manifest; an older bridge will not provide the callback ABI.
