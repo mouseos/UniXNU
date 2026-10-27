@@ -48,3 +48,14 @@ with tempfile.TemporaryDirectory(prefix='irq-pc-make-') as tmp:
     lines=subprocess.check_output(['make','-f',str(m)],text=True,env=env).splitlines()
     assert lines == ['rtclock.o:-DXNU_IRQ_PC_STATS=1 -DOTHER_FLAG=1','other.o:'], lines
 print('PASS: per-object make flag preserves target additions and excludes unrelated object')
+
+# Use the actual added declarations, including the capability function, with
+# the XNU missing-prototype warning enabled for the Apple ARM64 target.
+lines=[line[1:] for line in text.splitlines() if line.startswith('+') and not line.startswith('+++')]
+start=lines.index('#if defined(XNU_IRQ_PC_STATS) && XNU_IRQ_PC_STATS')
+end=lines.index('#endif',start)
+declarations='typedef unsigned long long uint64_t;\n'+'\n'.join(lines[start:end+1])+'\n'
+subprocess.run(['clang','-target','arm64-apple-darwin','-ffreestanding',
+                '-fsyntax-only','-Wmissing-prototypes','-Werror',
+                '-DXNU_IRQ_PC_STATS=1','-x','c','-'],input=declarations,text=True,check=True)
+print('PASS: timer hook declarations satisfy missing-prototype warning')
