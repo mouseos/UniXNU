@@ -28,7 +28,8 @@ PATCHES = [ROOT / 'drivers/NativeMetal/bridge/patches' / name for name in [
     '0001-optional-constant-output-members.patch', '0002-resource-wait-storage-dependencies.patch',
     '0003-cache-device-entry-point-priming.patch', '0004-fold-constant-global-field-loads.patch',
     '0005-keep-module-decodes-and-profile-fingerprints.patch', '0006-skip-draws-without-a-pipeline.patch',
-    '0007-accept-two-plane-rgb-surfaces.patch', '0008-optional-memory-pool-size.patch']]
+    '0007-accept-two-plane-rgb-surfaces.patch', '0008-optional-memory-pool-size.patch',
+    '0009-encoder-open-trace.patch']]
 def canonical_diff(diff):
     # Independent patches touch disjoint files; Git orders the combined diff by
     # filename, rather than by the order the patches were applied.
