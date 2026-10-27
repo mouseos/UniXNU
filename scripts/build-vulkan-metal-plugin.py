@@ -37,6 +37,7 @@ parser.add_argument('--driver-identifier', help='code signing identifier of the 
 parser.add_argument('--out', type=Path)
 parser.add_argument('--skip-bridge', action='store_true', help='use the existing build/native-metal-bridge/ios/libnative_metal_bridge.a')
 parser.add_argument('--runtime-commit-trace', action='store_true', help='compile opt-in runtime commit phase instrumentation')
+parser.add_argument('--deferred-submit', action='store_true', help='opt in to scheduler worker submission')
 parser.add_argument('--portable-sha2', action='store_true', help='build the bridge without requiring CPU SHA2 instructions')
 args = parser.parse_args()
 
@@ -61,7 +62,8 @@ BRIDGE = ROOT / 'build/native-metal-bridge/ios/libnative_metal_bridge.a'
 if not (args.skip_bridge and BRIDGE.is_file()):
     subprocess.run(['python3', ROOT / 'scripts/build-native-metal-bridge.py', '--target', 'ios'] +
                    (['--portable-sha2'] if args.portable_sha2 else []) +
-                   (['--runtime-commit-trace'] if args.runtime_commit_trace else []), check=True)
+                   (['--runtime-commit-trace'] if args.runtime_commit_trace else []) +
+                   (['--deferred-submit'] if args.deferred_submit else []), check=True)
 else:
     import hashlib
     record = BRIDGE.with_suffix('.json')
@@ -74,6 +76,8 @@ else:
         raise SystemExit('Existing bridge is not portable SHA2; rebuild without --skip-bridge')
     if metadata.get('runtime_commit_trace', False) != args.runtime_commit_trace:
         raise SystemExit('Existing bridge has a different commit trace feature; rebuild without --skip-bridge')
+    if metadata.get('deferred_submit', False) != args.deferred_submit:
+        raise SystemExit('Existing bridge has a different deferred submit feature; rebuild without --skip-bridge')
 if OUT.exists():
     shutil.rmtree(OUT)
 bundle = OUT / (args.name + '.bundle')

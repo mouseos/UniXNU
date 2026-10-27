@@ -34,6 +34,8 @@ with tempfile.TemporaryDirectory(prefix='metal-cache-guard-') as tmp:
         ({**base, 'runtime_commit_trace': False}, ['--runtime-commit-trace'], 'different commit trace feature'),
         ({**base, 'library_sha256': '0' * 64}, ['--runtime-commit-trace'], 'metadata or digest'),
         ({**base, 'portable_sha2': False}, ['--portable-sha2', '--runtime-commit-trace'], 'not portable SHA2'),
+        (base, ['--runtime-commit-trace', '--deferred-submit'], 'different deferred submit feature'),
+        ({**base, 'deferred_submit': True}, ['--runtime-commit-trace'], 'different deferred submit feature'),
     ):
         bridge.with_suffix('.json').write_text(json.dumps(metadata))
         result = subprocess.run(command + flags, capture_output=True, text=True)

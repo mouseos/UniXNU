@@ -20,6 +20,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--target', choices=['ios', 'host'], default='ios')
 parser.add_argument('--portable-sha2', action='store_true', help='use software SHA2 on CPUs without confirmed SHA2 instructions')
 parser.add_argument('--runtime-commit-trace', action='store_true', help='compile opt-in commit phase instrumentation')
+parser.add_argument('--deferred-submit', action='store_true', help='opt in to scheduler worker submission')
 parser.add_argument('--manifest-only', action='store_true',
                     help='write build/native-metal-bridge/Cargo.toml (patched source, fixtures) and stop before cargo, for `cargo fetch`')
 args = parser.parse_args()
@@ -30,7 +31,7 @@ PATCHES = [ROOT / 'drivers/NativeMetal/bridge/patches' / name for name in [
     '0003-cache-device-entry-point-priming.patch', '0004-fold-constant-global-field-loads.patch',
     '0005-keep-module-decodes-and-profile-fingerprints.patch', '0006-skip-draws-without-a-pipeline.patch',
     '0007-accept-two-plane-rgb-surfaces.patch', '0008-optional-memory-pool-size.patch',
-    '0009-commit-phase-observer.patch']]
+    '0009-commit-phase-observer.patch', '0010-deferred-submit.patch']]
 def canonical_diff(diff):
     # Independent patches touch disjoint files; Git orders the combined diff by
     # filename, rather than by the order the patches were applied.
@@ -77,6 +78,7 @@ manifest.write_text('\n'.join([
     '[package]', 'name = "native-metal-bridge"', 'version = "0.1.0"', 'edition = "2024"', 'rust-version = "1.98"', '[workspace]',
     '[lib]', 'crate-type = ["staticlib"]', 'path = ' + json.dumps(str(ROOT / 'drivers/NativeMetal/bridge/NativeMetalBridge.rs')),
     '[features]', 'unixnu-commit-trace = ["metal2vulkan-runtime/unixnu-commit-trace"]',
+    'unixnu-deferred-submit = ["metal2vulkan-runtime/unixnu-deferred-submit"]',
     '[dependencies]',
     'metal2vulkan = { path = ' + json.dumps(str(SOURCE / 'crates/metal2vulkan')) + ', features = ["ash"] }',
     'metal2vulkan-runtime = { path = ' + json.dumps(str(SOURCE / 'crates/metal2vulkan-runtime')) + ' }',
@@ -95,7 +97,8 @@ target_dir = ROOT / 'build/m2v-target'
 log = out / ('build-%s.log' % args.target)
 with log.open('w') as stream:
     result = subprocess.run(['cargo', '+1.98.0', 'build', '--release', '--manifest-path', manifest, '--target', triple] +
-                            (['--features', 'unixnu-commit-trace'] if args.runtime_commit_trace else []) + [
+                            (['--features', 'unixnu-commit-trace'] if args.runtime_commit_trace else []) +
+                            (['--features', 'unixnu-deferred-submit'] if args.deferred_submit else []) + [
                              '--target-dir', target_dir], env=env, stdout=stream, stderr=subprocess.STDOUT, timeout=1800)
 if result.returncode:
     raise SystemExit(log.read_text()[-6000:])
@@ -107,6 +110,6 @@ with final.open('rb') as stream:
     digest = hashlib.file_digest(stream, 'sha256').hexdigest()
 final.with_suffix('.json').write_text(json.dumps({
     'target': args.target, 'portable_sha2': args.portable_sha2, 'runtime_commit_trace': args.runtime_commit_trace,
-    'translator': PIN, 'library_sha256': digest,
+    'deferred_submit': args.deferred_submit, 'translator': PIN, 'library_sha256': digest,
 }, indent=2) + '\n')
 print('PASS: native Metal bridge static library for %s (%d bytes); translator %s' % (args.target, final.stat().st_size, PIN[:12]))
