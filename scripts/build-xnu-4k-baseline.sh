@@ -873,6 +873,18 @@ if [ "$IPI_SIGNAL_STATS" != 0 ] && [ "$IPI_SIGNAL_STATS" != 1 ]; then
   echo 'XNU_IPI_SIGNAL_STATS must be 0 or 1' >&2
   exit 1
 fi
+python3 - "$IPI_SIGNAL_STATS" <<'PYIPI'
+from pathlib import Path
+import sys
+out = Path('build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837')
+stamp = out / '.ipi-signal-stats-mode'
+mode = sys.argv[1]
+if not stamp.exists() or stamp.read_text() != mode:
+    for relative in ('osfmk/DEVELOPMENT/cpu_common.o', 'mach.development.bcm2837.unstripped.noctf'):
+        (out / relative).unlink(missing_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(mode)
+PYIPI
 env "XNU_IRQ_PC_STATS=$IRQ_PC_STATS" "XNU_IPI_SIGNAL_STATS=$IPI_SIGNAL_STATS" make -C .cache/xnu-work "${XNU_BUILD_TARGET:-build}" SDKROOT="${XNU_SDKROOT:-iphoneos}" ARCH_CONFIGS=ARM64 \
   MACHINE_CONFIGS=BCM2837 KERNEL_CONFIGS=DEVELOPMENT \
   ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG=arm64 LARGE_MEMORY_DEFINE=-UARM_LARGE_MEMORY \
