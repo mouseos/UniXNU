@@ -1,12 +1,15 @@
 --- a/makedefs/MakeInc.rule
 +++ b/makedefs/MakeInc.rule
-@@ -492,6 +492,11 @@
+@@ -492,6 +492,14 @@
  # Compilation rules to generate .o from .c for normal files
  #
  C_RULE_0=@$(LOG_CC) "$@"
 +# Keep optional IRQ sampling local to rtclock.o while preserving other per-object flags.
 +ifneq ($(XNU_IRQ_PC_STATS),)
 +override rtclock.o_CFLAGS_ADD += -DXNU_IRQ_PC_STATS=$(XNU_IRQ_PC_STATS)
++endif
++ifneq ($(XNU_IPI_SIGNAL_STATS),)
++override cpu_common.o_CFLAGS_ADD += -DXNU_IPI_SIGNAL_STATS=$(XNU_IPI_SIGNAL_STATS)
 +endif
 +
  C_RULE_1A=$(_v)$(KCC) -c $(filter-out $($@_CFLAGS_RM), $(CFLAGS) $(CWARNFLAGS)) -MD -MF $(@:o=d) -MJ $(@:o=o.json) -MP $($@_CFLAGS_ADD) $($@_CWARNFLAGS_ADD) $(INCFLAGS) $($@_INCFLAGS)
