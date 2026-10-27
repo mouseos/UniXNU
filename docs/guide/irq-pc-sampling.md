@@ -20,9 +20,14 @@ Check the patch against the pinned XNU source and both feature gates with:
 A host fixture does not establish a real XNU compile, interrupt behavior,
 representative sampling, or hardware safety.
 
-The optional `native_irq_correlation_sample` weak observer receives user PCs
+The optional `native_irq_correlation_sample` observer is independently compiled
+only when `XNU_IRQ_CORRELATION_STATS=1` (default 0) and requires
+`XNU_IRQ_PC_STATS=1` plus a linked board provider. The legacy correlation
+board must explicitly enable both flags; a live-PC-only board leaves the
+correlation flag off. Some kernel links reject unresolved weak imports.
+The observer receives user PCs
 unchanged and kernel PCs unslid, with the explicit mode. It is compiled out by
-the same default-off flag. The existing observer's user-PC suppression remains
+the two default-off flags. The existing observer's user-PC suppression remains
 unchanged. A board must independently gate and bound any recording of addresses;
 user PCs can expose ASLR-sensitive information in diagnostic output.
 

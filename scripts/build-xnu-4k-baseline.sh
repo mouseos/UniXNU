@@ -855,12 +855,21 @@ if [[ "$IRQ_PC_STATS" != 0 && "$IRQ_PC_STATS" != 1 ]]; then
   echo 'XNU_IRQ_PC_STATS must be 0 or 1' >&2
   exit 1
 fi
-python3 - "$IRQ_PC_STATS" <<'PYIRQ'
+IRQ_CORRELATION_STATS=${XNU_IRQ_CORRELATION_STATS:-0}
+if [[ "$IRQ_CORRELATION_STATS" != 0 && "$IRQ_CORRELATION_STATS" != 1 ]]; then
+  echo 'XNU_IRQ_CORRELATION_STATS must be 0 or 1' >&2
+  exit 1
+fi
+if [[ "$IRQ_CORRELATION_STATS" == 1 && "$IRQ_PC_STATS" != 1 ]]; then
+  echo 'XNU_IRQ_CORRELATION_STATS requires XNU_IRQ_PC_STATS=1' >&2
+  exit 1
+fi
+python3 - "$IRQ_PC_STATS" "$IRQ_CORRELATION_STATS" <<'PYIRQ'
 from pathlib import Path
 import sys
 out = Path('build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837')
 stamp = out / '.irq-pc-stats-mode'
-mode = 'object-flags-v2:' + sys.argv[1]
+mode = 'object-flags-v3:' + sys.argv[1] + ':' + sys.argv[2]
 if not stamp.exists() or stamp.read_text() != mode:
     for relative in ('osfmk/DEVELOPMENT/rtclock.o', 'mach.development.bcm2837.unstripped.noctf'):
         (out / relative).unlink(missing_ok=True)
@@ -886,7 +895,7 @@ if not stamp.exists() or stamp.read_text() != mode:
     out.mkdir(parents=True, exist_ok=True)
     stamp.write_text(mode)
 PYIPI
-env "XNU_IRQ_PC_STATS=$IRQ_PC_STATS" "XNU_IPI_SIGNAL_STATS=$IPI_SIGNAL_STATS" make -C .cache/xnu-work "${XNU_BUILD_TARGET:-build}" SDKROOT="${XNU_SDKROOT:-iphoneos}" ARCH_CONFIGS=ARM64 \
+env "XNU_IRQ_PC_STATS=$IRQ_PC_STATS" "XNU_IRQ_CORRELATION_STATS=$IRQ_CORRELATION_STATS" "XNU_IPI_SIGNAL_STATS=$IPI_SIGNAL_STATS" make -C .cache/xnu-work "${XNU_BUILD_TARGET:-build}" SDKROOT="${XNU_SDKROOT:-iphoneos}" ARCH_CONFIGS=ARM64 \
   MACHINE_CONFIGS=BCM2837 KERNEL_CONFIGS=DEVELOPMENT \
   ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG=arm64 LARGE_MEMORY_DEFINE=-UARM_LARGE_MEMORY \
   ARM64_LINK_ADDR=0xfffffff007004000 ARM64_PLKSEG_ADDR=0xfffffff004004000 \

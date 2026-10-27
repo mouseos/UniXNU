@@ -83,18 +83,18 @@ int main(void){
  uint64_t lr=0x9988;sample(0x3200,0,&lr);
  if (XNU_IRQ_PC_STATS){
   assert(old_count==1 && old_pc==0x2200 && old_mode==0);
-  assert(corr_count==1 && corr_pc==0x2200 && corr_mode==0);
+  assert(!XNU_IRQ_CORRELATION_STATS || (corr_count==1 && corr_pc==0x2200 && corr_mode==0));
   assert(live_count==1 && live_pc==0x2200 && live_lr==0 && live_mode==0);
  }
  sample(0x4500,1,&lr);
  if (XNU_IRQ_PC_STATS){
   assert(old_count==2 && old_pc==0 && old_mode==1);
-  assert(corr_count==2 && corr_pc==0x4500 && corr_mode==1);
+  assert(!XNU_IRQ_CORRELATION_STATS || (corr_count==2 && corr_pc==0x4500 && corr_mode==1));
   assert(live_count==2 && live_pc==0x4500 && live_lr==lr && live_mode==1);
 #if XNU_IRQ_PC_STATS
   native_irq_pc_sample=0;native_irq_correlation_sample=0;native_live_pc_sample=0;
   sample(0x5000,1,&lr);
-  assert(old_count==2 && corr_count==2 && live_count==2);
+  assert(old_count==2 && corr_count==2*XNU_IRQ_CORRELATION_STATS && live_count==2);
 #endif
  } else assert(!old_count && !corr_count && !live_count);
  return 0;
@@ -102,9 +102,9 @@ int main(void){
 """
 with tempfile.TemporaryDirectory(prefix='irq-pc-actual-') as tmp:
  c=Path(tmp)/'test.c'; b=Path(tmp)/'test';c.write_text(source)
- for mode in (0,1):
+ for mode,corr in ((0,0),(1,0),(1,1)):
   subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror',
-                  f'-DXNU_IRQ_PC_STATS={mode}','-D__arm64__=1',str(c),'-o',str(b)],check=True)
+                  f'-DXNU_IRQ_PC_STATS={mode}',f'-DXNU_IRQ_CORRELATION_STATS={corr}','-D__arm64__=1',str(c),'-o',str(b)],check=True)
   subprocess.run([str(b)],check=True)
 print('PASS: actual timer block preserves all three observers, modes and optional hooks')
 
@@ -144,3 +144,59 @@ for mode in (0,1):
   subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror',f'-DXNU_IRQ_PC_STATS={mode}',str(source),'-o',str(binary)],check=True)
   subprocess.run([str(binary)],check=True)
 print('PASS: timer hook declarations satisfy missing-prototype warning')
+
+# Reproduce a strict kernel-style link: weak imports are deliberately treated
+# as strong so the missing correlation provider cannot be silently accepted.
+# This compiles the actual added declarations and interrupt block.
+link_prefix = r"""
+#include <stdint.h>
+#define VM_KERNEL_UNSLIDE(x) ((x)-0x1000)
+#define get_saved_state_lr(x) (*(x))
+"""+declarations.replace('typedef unsigned long long uint64_t;\n','').replace('__attribute__((weak_import))','')+r"""
+void native_irq_pc_sample(uint64_t pc,unsigned mode){(void)pc;(void)mode;}
+void native_live_pc_sample(uint64_t pc,uint64_t lr,unsigned mode){(void)pc;(void)lr;(void)mode;}
+void invoke(uint64_t pc,unsigned user_mode,uint64_t *regs){
+"""+block+r"""
+(void)pc;(void)user_mode;(void)regs;
+}
+int main(void){uint64_t lr=5;invoke(0x2000,1,&lr);return 0;}
+"""
+with tempfile.TemporaryDirectory(prefix='irq-pc-link-') as tmp:
+ c=Path(tmp)/'link.c';b=Path(tmp)/'link';c.write_text(link_prefix)
+ for corr in (0,1):
+  cmd=['cc','-std=c11','-DXNU_IRQ_PC_STATS=1',f'-DXNU_IRQ_CORRELATION_STATS={corr}','-D__arm64__=1',str(c),'-o',str(b)]
+  result=subprocess.run(cmd,capture_output=True,text=True)
+  if corr==0: assert result.returncode==0,result.stderr
+  else: assert result.returncode!=0 and 'native_irq_correlation_sample' in result.stderr
+ c.write_text(link_prefix+'\nvoid native_irq_correlation_sample(uint64_t pc,unsigned mode){(void)pc;(void)mode;}\n')
+ subprocess.run(['cc','-std=c11','-DXNU_IRQ_PC_STATS=1','-DXNU_IRQ_CORRELATION_STATS=1','-D__arm64__=1',str(c),'-o',str(b)],check=True)
+print('PASS: strict link succeeds without correlation provider only when the separate flag is off')
+
+
+# Exercise both actual object-flag rules through recursive make.
+make_patch=(root/'patches/xnu/zz-p31-irq-pc-make.patch').read_text()
+actual='\n'.join(line[1:] for line in make_patch.splitlines() if line.startswith('+') and not line.startswith('+++'))
+assert 'XNU_IRQ_CORRELATION_STATS=$(XNU_IRQ_CORRELATION_STATS)' in actual
+with tempfile.TemporaryDirectory(prefix='irq-corr-make-') as tmp:
+ m=Path(tmp)/'Makefile'
+ m.write_text(actual+'\nall:\n\t@$(MAKE) -f $(firstword $(MAKEFILE_LIST)) child\nchild: rtclock.o other.o\nrtclock.o other.o:\n\t@printf "%s:%s\\n" "$@" "$($@_CFLAGS_ADD)"\n')
+ env={**os.environ,'XNU_IRQ_PC_STATS':'1','XNU_IRQ_CORRELATION_STATS':'0'}
+ output=subprocess.check_output(['make','--no-print-directory','-f',str(m)],env=env,text=True).splitlines()
+ assert output==['rtclock.o:-DXNU_IRQ_PC_STATS=1 -DXNU_IRQ_CORRELATION_STATS=0','other.o:'],output
+ env['XNU_IRQ_CORRELATION_STATS']='1'
+ output=subprocess.check_output(['make','--no-print-directory','-f',str(m)],env=env,text=True).splitlines()
+ assert output==['rtclock.o:-DXNU_IRQ_PC_STATS=1 -DXNU_IRQ_CORRELATION_STATS=1','other.o:'],output
+# Exercise the actual mode-stamp program, including no rebuild on unchanged mode.
+build=(root/'scripts/build-xnu-4k-baseline.sh').read_text()
+start=build.index('from pathlib import Path',build.index("<<'PYIRQ'"))
+end=build.index('\nPYIRQ',start)
+stamp_program=build[start:end]
+assert "sys.argv[1] + ':' + sys.argv[2]" in stamp_program
+with tempfile.TemporaryDirectory(prefix='irq-corr-stamp-') as tmp:
+ out=Path(tmp)/'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837'
+ obj=out/'osfmk/DEVELOPMENT/rtclock.o';obj.parent.mkdir(parents=True)
+ def stamp(corr): subprocess.run(['python3','-','1',corr],input=stamp_program,text=True,cwd=tmp,check=True)
+ obj.write_text('initial');stamp('0');assert not obj.exists()
+ obj.write_text('unchanged');stamp('0');assert obj.exists()
+ stamp('1');assert not obj.exists()
+print('PASS: correlation object flag and mode changes propagate and invalidate incrementally')
