@@ -13,6 +13,8 @@ with tempfile.TemporaryDirectory(prefix='metal-cache-guard-') as tmp:
     root = Path(tmp)
     (root / 'scripts').mkdir()
     shutil.copyfile(source, root / 'scripts/build-vulkan-metal-plugin.py')
+    (root / 'scripts/data').mkdir()
+    (root / 'scripts/data/gpu-metal-vulkan-inputs.json').write_text(json.dumps({'translator': {'commit': 'fixture-pin'}}))
     bridge = root / 'build/native-metal-bridge/ios/libnative_metal_bridge.a'
     bridge.parent.mkdir(parents=True)
     bridge.write_bytes(b'fixed bridge')
@@ -25,12 +27,15 @@ with tempfile.TemporaryDirectory(prefix='metal-cache-guard-') as tmp:
     sentinel = out / 'existing'
     sentinel.write_text('preserve')
     digest = hashlib.sha256(bridge.read_bytes()).hexdigest()
-    base = dict(target='ios', portable_sha2=True, runtime_commit_trace=True, library_sha256=digest)
+    base = dict(target='ios', portable_sha2=True, runtime_commit_trace=True, runtime_shader_capture=False, translator='fixture-pin', library_sha256=digest)
     command = [sys.executable, str(root / 'scripts/build-vulkan-metal-plugin.py'), '--name', 'Fixture',
                '--principal-class', 'Device', '--vulkan-driver', str(driver), '--board-source', str(board),
                '--out', str(out), '--skip-bridge']
     for metadata, flags, expected in (
         (base, [], 'different commit trace feature'),
+        ({**base, 'runtime_shader_capture': True}, ['--runtime-commit-trace'], 'different shader capture feature'),
+        (base, ['--runtime-commit-trace', '--runtime-shader-capture'], 'different shader capture feature'),
+        ({**base, 'translator': 'old-pin'}, ['--runtime-commit-trace'], 'translator revision differs'),
         ({**base, 'runtime_commit_trace': False}, ['--runtime-commit-trace'], 'different commit trace feature'),
         ({**base, 'library_sha256': '0' * 64}, ['--runtime-commit-trace'], 'metadata or digest'),
         ({**base, 'portable_sha2': False}, ['--portable-sha2', '--runtime-commit-trace'], 'not portable SHA2'),
