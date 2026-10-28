@@ -11,7 +11,7 @@
   },
   "translator": {
     "repository": "https://github.com/mouseos/metal2vulkan",
-    "commit": "362aa5373a1d19d6ef9254d1a5ca148f71474050",
+    "commit": "9804d0e047bfe37a5da90faa06864ef63758e5ca",
     "clone": "depth 1, blob filter, checked out source",
     "files": {
       "README.md": "e603d5c9f6b736e1f468e06e062299eff2cbb3b799718a24518dad4733ad4318",
