@@ -2,6 +2,7 @@
 """Identify the original generic framebuffer implementation and its abstract leaves."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import struct
 import sys
@@ -10,9 +11,10 @@ sys.path.insert(0,str(ROOT/'kits/NativePrelink'))
 from native_prelink import macho,backed_offset,exports
 def require(v,why):
     if not v:raise SystemExit(why)
-path=ROOT/'build/native-prelink/native-owner-mobile-graphics-candidate.macho'
+path=(ROOT.parent/'kernel/kernel.macho' if os.environ.get('UNIXNU_SOURCE_REFERENCE_PASS')=='final'
+      else ROOT/'build/native-prelink/native-owner-mobile-graphics-candidate.macho')
 FAMILY_TEXT_SHA='2e044ee68c1650397e1435234ca6459206262e4c7ed709cb7131c6f664f9bd9b'
-if not path.exists():
+if not path.exists() and os.environ.get('UNIXNU_SOURCE_REFERENCE_PASS')!='final':
     # Build products are pruned: any later candidate built from the same original kernelcache carries the identical original
     # IOMobileGraphicsFamily executable (checked by hash below), and every layout check in this audit runs against it.
     later=sorted((ROOT/'build/native-prelink').glob('native-owner-ufs-cpu-desktop-*-candidate.macho'),key=lambda f:f.stat().st_mtime)
@@ -58,7 +60,7 @@ for i,va in enumerate(legacy):
 runtime=ROOT/'build/darwinboot-owner-hvf-mobile-graphics-legacy-class/gdb-stop.json'
 out=ROOT/'build/display-analysis/mobile-graphics-legacy-abi.json'
 RUNTIME_SHA='3044c2beff552911605994c0dc7aa73182066cbb5aed0b396999ceeb5a96da2b'
-if runtime.exists():
+if runtime.exists() and os.environ.get('UNIXNU_SOURCE_REFERENCE_PASS')!='final':
     d=json.loads(runtime.read_text());args=[int(v,16) for v in d['function_entry_arguments']]
     require(d['kernel_sha256']==plan['candidate_sha256'] and d['function_return_stack_matched']
             and args[0]==0xfffffff006b35940 and args[2:4]==[0xfffffff006b31400,0x18a0]
