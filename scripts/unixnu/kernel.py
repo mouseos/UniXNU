@@ -1,6 +1,7 @@
 """XNU kernel: build from the patched Apple source, then prelink against the original kernelcache."""
 import os
 import shlex
+import shutil
 from pathlib import Path
 
 from . import ipsw
@@ -68,7 +69,7 @@ def build_archives(ctx, env):
             raise Error(f'{key}: {value} not found; no builder makes it, supply the archive')
 
 
-def build(ctx, modules):
+def build(ctx, modules, reference_pass=None):
     log('kernel: XNU')
     for name in ('git', 'make', 'clang', 'cmake', 'ninja', 'unifdef'):
         tool(name, 'brew install ' + name)
@@ -77,6 +78,8 @@ def build(ctx, modules):
     if not script.is_file():
         raise Error(f'{script} missing')
     env = dict(os.environ)
+    if reference_pass is not None:
+        env['UNIXNU_SOURCE_REFERENCE_PASS'] = reference_pass
     env.update(xnu_env(ctx))
     env.update(version_env(modules))
     env['JOBS'] = str(ctx.jobs)
@@ -142,3 +145,45 @@ def prelink(ctx):
     run(command, cwd=ctx.tree, log_file=ctx.logs / 'prelink.log')
     log(f'kernel: {output} sha256 {sha256_file(output)}')
     return output
+
+
+def validate_candidate(ctx, candidate):
+    """Optional board-owned validation; absent for all existing boards."""
+    checker = ctx.board.get('kernel', {}).get('candidate_validator')
+    if checker:
+        script = ctx.device / checker
+        if not script.is_file():
+            raise Error(f'kernel candidate validator missing: {script}')
+        run(['python3', script, '--kernel', candidate], cwd=ctx.tree,
+            env=dict(os.environ, PATH=toolchain_path()), log_file=ctx.logs / 'kernel-validation.log')
+
+
+def build_checked(ctx, modules):
+    """Optionally create this build's reference from source before the final pass."""
+    spec = ctx.board.get('kernel', {})
+    if not spec.get('source_reference_bootstrap', False):
+        build(ctx, modules)
+        candidate = prelink(ctx)
+        validate_candidate(ctx, candidate)
+        return candidate
+    if not spec.get('candidate_validator'):
+        raise Error('source_reference_bootstrap requires candidate_validator')
+    candidate = ctx.work / 'kernel/kernel.macho'
+    record = candidate.with_suffix('.json')
+    # Discard any old reference before archives are built: the first pass is
+    # generated from the configured source and feeds, not an unknown binary.
+    reference_copy = candidate.with_name('kernel.reference.macho')
+    record_copy = candidate.with_name('kernel.reference.json')
+    for stale in (candidate, record, reference_copy, record_copy):
+        stale.unlink(missing_ok=True)
+    build(ctx, modules, reference_pass='bootstrap')
+    reference = prelink(ctx)
+    if not reference.is_file() or not record.is_file():
+        raise Error('source reference kernel or prelink record missing')
+    shutil.copyfile(reference, reference_copy)
+    shutil.copyfile(record, record_copy)
+    log(f'kernel: source reference sha256 {sha256_file(reference_copy)}')
+    build(ctx, modules, reference_pass='final')
+    candidate = prelink(ctx)
+    validate_candidate(ctx, candidate)
+    return candidate
