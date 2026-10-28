@@ -15,6 +15,7 @@ struct reason { unsigned osr_namespace; uint64_t osr_code; };
 struct process { char p_name[16]; struct reason *p_exit_reason; };
 static const char *bootarg; static int prints;
 static int PE_parse_boot_argn(const char *key, void *out, int len) { (void)key; if (!bootarg) return 0; snprintf(out,len,"%s",bootarg); return 1; }
+static const char *exit_reason_get_string_desc(struct reason *r) { return r ? "test description" : 0; }
 static int proc_getpid(struct process *p) { (void)p; return 56; }
 static int output(const char *format,...) { (void)format; ++prints; return 0; }
 #define printf output
