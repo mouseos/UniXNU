@@ -878,6 +878,24 @@ if not stamp.exists() or stamp.read_text() != mode:
 PYIRQ
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_ROOT_TIMING=$ROOT_TIMING"
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOOT_PROGRESS=$BOOT_PROGRESS"
+PROCESS_EXIT_DIAG=${XNU_PROCESS_EXIT_DIAG:-0}
+if [ "$PROCESS_EXIT_DIAG" != 0 ] && [ "$PROCESS_EXIT_DIAG" != 1 ]; then
+  echo 'XNU_PROCESS_EXIT_DIAG must be 0 or 1' >&2
+  exit 1
+fi
+python3 - "$PROCESS_EXIT_DIAG" <<'PYEXIT'
+from pathlib import Path
+import sys
+out = Path('build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837')
+stamp = out / '.process-exit-diag-mode'
+mode = 'v1:' + sys.argv[1]
+if not stamp.exists() or stamp.read_text() != mode:
+    for relative in ('bsd/DEVELOPMENT/kern_exit.o', 'mach.development.bcm2837.unstripped.noctf'):
+        (out / relative).unlink(missing_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(mode)
+PYEXIT
+EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_PROCESS_EXIT_DIAG=$PROCESS_EXIT_DIAG"
 IPI_SIGNAL_STATS=${XNU_IPI_SIGNAL_STATS:-0}
 if [ "$IPI_SIGNAL_STATS" != 0 ] && [ "$IPI_SIGNAL_STATS" != 1 ]; then
   echo 'XNU_IPI_SIGNAL_STATS must be 0 or 1' >&2
