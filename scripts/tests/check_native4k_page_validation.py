@@ -53,6 +53,26 @@ int main(void){
    dispose(&blob);
   }
  }
+ /* Absent selector and explicit non-one values retain the original read size. */
+ for(int setting=0;setting<3;setting++){
+  reset();batch_present=setting!=0;batch_flag=setting==2?2:0;setup(32768,&cd,&blob);
+  assert(!cs_native4k_prepare(&vnode,&blob));
+  assert(reads==2&&read_bytes==32768&&scratch_size==16384&&cs_native4k_full_blocks==2);
+  dispose(&blob);
+ }
+ /* Faults at the first and second 16KiB reads: original and default-off must agree. */
+ for(int fault=0;fault<4;fault++)for(int location=1;location<=2;location++){
+  reset();batch_present=0;batch_flag=0;setup(32768,&cd,&blob);
+  int want;
+  if(fault==0){read_error_call=location;want=EACCES;}
+  else if(fault==1){resid_call=location;want=EIO;}
+  else if(fault==2){null_hash_index=location-1;want=EBADEXEC;}
+  else {expected_hashes[(location-1)*md.cs_size]^=1;want=EBADEXEC;}
+  assert(cs_native4k_prepare(&vnode,&blob)==want);
+  assert(reads==(unsigned)location&&cs_native4k_full_blocks==(unsigned)(location-1));
+  assert(!blob.csb_native4k_hashes&&!cs_native4k_ready_blobs&&!protects);
+  dispose(&blob);
+ }
  for(int batch=0;batch<2;batch++){
   reset();batch_present=1;batch_flag=batch;setup(32768,&cd,&blob);
   expected_hashes[0]^=1;fail_from=16384;

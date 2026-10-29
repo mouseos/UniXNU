@@ -359,3 +359,10 @@ hardware performance improvement is claimed until measured with a matching paylo
 code-signing monitor検査の後にprepareを実行する。hostのモックは実際の
 AMFIやカーネルリンクを証明しない。バッチ読みの一時バッファは16 KiBから
 256 KiBへ増えるため、低メモリ時の割当て・実機の動作は別途確認が必要。
+
+固定版の比較試験は、read-batchパッチ適用前と適用後の既定offについて、
+フラグなし・0・1以外の16 KiB読み、先頭・次ブロックのread error、短読、
+ハッシュ欠落、不一致を同じ条件で実行し、エラーと未公開を確認する。
+さらに前方ブロックの不一致と後方のread errorを同時に模擬し、通常経路は
+不一致を、バッチ経路は先読みのエラーを返すことを確認する。ホスト上の
+模擬readであり、実ファイルシステムやAMFIの挙動を再現する試験ではない。
