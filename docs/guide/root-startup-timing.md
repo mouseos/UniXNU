@@ -351,3 +351,11 @@ hardware performance improvement is claimed until measured with a matching paylo
 ページの改変検出を確認する。これはXNU実機上のI/O、キャッシュ整合性や
 性能を証明しない。通常読みに比べバッチは読み込み要求をまとめるが、
 署名付き範囲の読み込みとハッシュ計算を省略しない。
+
+比較試験はread-batchパッチ適用前の実関数も同じ入力・SHA-256期待値で
+検査し、既定off・onのページ検証は計時をコンパイルした場合としない場合の
+両方を実行する。末尾の部分ページにはNXが付き、署名対象の変更はtaintと
+なる。`ubc_cs_blob_add` の呼出し順序は、構造検証と構成に応じたMACF・
+code-signing monitor検査の後にprepareを実行する。hostのモックは実際の
+AMFIやカーネルリンクを証明しない。バッチ読みの一時バッファは16 KiBから
+256 KiBへ増えるため、低メモリ時の割当て・実機の動作は別途確認が必要。
