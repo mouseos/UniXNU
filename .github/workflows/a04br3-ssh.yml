@@ -271,9 +271,14 @@ jobs:
           ./unixnu build kernel
           ./unixnu build payload $TRUST_CACHE_ARG "$RUNNER_TEMP/trustcache" --data-ramdisk "$RUNNER_TEMP/data.dbr" --unique-chip-id "$UNIQUE_CHIP_ID" $SKIP_SETUP_ARG ${METAL_KERNEL_ARGS[@]+"${METAL_KERNEL_ARGS[@]}"}
           tag="$(git -C device rev-parse --short HEAD)"
-          cp out/a04br3/payload/payload.img "$RUNNER_TEMP/payload-$tag.img"
-          gh release upload "$RELEASE" "$RUNNER_TEMP/payload-$tag.img" --clobber -R "$GITHUB_REPOSITORY"
-          echo "PUBLISHED payload-$tag.img"
+          suffix="${A04BR3_ASSET_SUFFIX:-}"
+          if [[ -n "$suffix" && ! "$suffix" =~ ^-[a-zA-Z0-9][a-zA-Z0-9-]*$ ]]; then
+            echo 'invalid A04BR3_ASSET_SUFFIX' >&2
+            exit 1
+          fi
+          cp out/a04br3/payload/payload.img "$RUNNER_TEMP/payload-$tag$suffix.img"
+          gh release upload "$RELEASE" "$RUNNER_TEMP/payload-$tag$suffix.img" --clobber -R "$GITHUB_REPOSITORY"
+          echo "PUBLISHED payload-$tag$suffix.img"
           SCRIPT
           chmod +x /tmp/a04br3-rebuild.sh
           gh release create "a04br3-ssh-${{ github.run_id }}" --title "a04br3 SSH build ${{ github.run_id }}" \

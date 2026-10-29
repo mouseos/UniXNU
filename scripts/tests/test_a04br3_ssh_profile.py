@@ -104,6 +104,13 @@ esac
             assert result.returncode == 0, result.stderr
             values=result.stdout.decode().split('\0')[:-1]
             assert values == (['1']*len(flags) if expected == 'on' else ['unset']*len(flags)), values
+# Exercise the actual suffix guard without running upload or needing a runner.
+start = source.index('          suffix="${A04BR3_ASSET_SUFFIX:-}"')
+end = source.index('          cp out/a04br3/payload/payload.img', start)
+guard = '\n'.join(line[10:] for line in source[start:end].splitlines())
+for suffix, accepted in [('', True), ('-stream-2c1f944', True), ('../bad', False), ('-bad/name', False), ('-', False)]:
+    result = subprocess.run(['/bin/bash', '-c', guard], env=dict(os.environ, A04BR3_ASSET_SUFFIX=suffix), capture_output=True)
+    assert (result.returncode == 0) == accepted, (suffix, result.returncode)
 # Parse every embedded shell body with bash without executing it.
 for run in re.findall(r'^        run: \|\n((?:          .*\n|\n)+)', source, re.M):
     script = '\n'.join(line[10:] for line in run.splitlines())
