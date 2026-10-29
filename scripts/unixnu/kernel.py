@@ -69,6 +69,28 @@ def build_archives(ctx, env):
             raise Error(f'{key}: {value} not found; no builder makes it, supply the archive')
 
 
+def missing_link_inputs(tree):
+    """Objects recorded by the last XNU pass which are no longer present.
+
+    An interrupted build can leave compile records and link.filelist behind
+    after invalidating individual objects. Archive builders must not consume
+    that stale list until the normal bootstrap has regenerated its inputs.
+    """
+    filelist = Path(tree) / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/link.filelist'
+    if not filelist.is_file():
+        return []
+    missing = []
+    for line in filelist.read_text().splitlines():
+        name = line.strip()
+        if name:
+            path = Path(name)
+            if not path.is_absolute():
+                path = Path(tree) / path
+            if not path.is_file():
+                missing.append(str(path))
+    return missing
+
+
 def build(ctx, modules, reference_pass=None):
     log('kernel: XNU')
     for name in ('git', 'make', 'clang', 'cmake', 'ninja', 'unifdef'):
@@ -91,7 +113,10 @@ def build(ctx, modules, reference_pass=None):
     if prelink_spec.get('slide') is not None:
         env['UNIXNU_PRELINK_SLIDE'] = str(prelink_spec['slide'])
     record = ctx.tree / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/startup.o.json'
-    if not record.is_file():
+    missing = missing_link_inputs(ctx.tree)
+    if not record.is_file() or missing:
+        if missing:
+            log(f'kernel: {len(missing)} missing XNU link inputs; regenerating with bootstrap')
         # The archive builders and the boot progress layer read compile records of the XNU build, which only an earlier
         # pass leaves behind. A first build from scratch therefore runs one pass without them; XNU_BOOTSTRAP makes it
         # skip the archive checks and link without the archives, so it stops at the link and only the records are
@@ -101,8 +126,11 @@ def build(ctx, modules, reference_pass=None):
         try:
             run(['bash', script], cwd=ctx.tree, env=subprocess_env, log_file=ctx.logs / 'kernel-bootstrap.log')
         except Error:
-            if not record.is_file():
+            if not record.is_file() or missing_link_inputs(ctx.tree):
                 raise
+        missing = missing_link_inputs(ctx.tree)
+        if missing:
+            raise Error(f'XNU bootstrap left {len(missing)} missing link inputs: {missing[0]}')
     storage = ctx.tree / 'build/storage-abi/include/IOKit/storage'
     if (ctx.tree / 'refer/IOStorageFamily').is_dir() and not storage.is_dir():
         log('kernel: prepare storage headers')
