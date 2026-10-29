@@ -24,6 +24,7 @@ def parse(text):
             group=active.pop(name); expected=group['header'].get('count',-1)
             required={'seq','id','op','pid','tid','start','end','base','bytes','reads','error'} if name=='CS' else {'seq','index','ns','pid','tid','window','block','count'}
             bad=any(not required.issubset(e) for e in group['events'])
+            if name=='NativeMsdc' and (group['header'].get('prequeue',1)!=1 or group['header'].get('unit')!=512): bad=True
             if name=='NativeMsdc': bad |= [e.get('index') for e in group['events']] != list(range(expected))
             if len(group['events']) != expected or (name=='CS' and f.get('count')!=expected) or bad: incomplete+=1
             else: streams[name][seq]=group
@@ -33,17 +34,23 @@ def parse(text):
 def analyze(text):
     streams,incomplete=parse(text); cs=[]; io=[]; loss={}
     for name,groups in streams.items():
-        loss[name]={k:sum(g['header'].get(k,0) for g in groups.values()) for k in ('full','busy','keys_full','contention')}
+        keys=('full','busy','keys_full') if name=='CS' else ('full','contention')
+        loss[name]={k:sum(g['header'].get(k,0) for g in groups.values()) for k in keys}
         for g in groups.values(): (cs if name=='CS' else io).extend(g['events'])
-    starts={}; ends={}
+    starts={}; ends={}; invalid_cs=0; duplicates=set()
     for e in cs:
         if not all(k in e for k in ('id','op','pid','tid','start','end','base','bytes','reads','error')): continue
         key=(e['id'],e['op'])
-        (ends if e['end'] else starts)[key]=e
+        target=ends if e['end'] else starts
+        if key in target: duplicates.add(key); invalid_cs+=1
+        else: target[key]=e
     completed=[]
     for key,e in ends.items():
+        if key in duplicates: continue
         # An end includes its own start; a missing start is visible, not invented.
-        if e['end']<e['start']: continue
+        if e['end']<e['start']:
+            invalid_cs+=1
+            continue
         completed.append({**e,'start_observed':key in starts})
     preparation=[]
     for i,a in enumerate(completed):
@@ -66,7 +73,7 @@ def analyze(text):
     for e in completed:
         matches=[v for v in io if all(k in v for k in ('pid','tid','ns','block','count','window')) and v['pid']==e['pid'] and v['tid']==e['tid'] and e['start']<=v['ns']<=e['end']]
         candidates.append({'id':e['id'],'op':e['op'],'same_thread_offers':len(matches),'offer_bytes':sum(v['count']*512 for v in matches),'start_observed':e['start_observed']})
-    return {'reports':{name:len(groups) for name,groups in streams.items()},'missing_streams':[name for name,groups in streams.items() if not groups], 'loss':loss,'incomplete_reports':incomplete,'cs_start_without_end':len(starts.keys()-ends.keys()),'cs_end_without_start':len(ends.keys()-starts.keys()),'cs_completed':len(completed),'block_offers':len(io),'file_range_overlaps':preparation,'block_range_overlaps':block,'temporal_thread_candidates':candidates,'limitations':'Offers are samples, not physical I/O; file offsets and block offsets are not a mapping; cache/asynchronous I/O and drops prevent causal attribution.'}
+    return {'reports':{name:len(groups) for name,groups in streams.items()},'missing_streams':[name for name,groups in streams.items() if not groups], 'loss':loss,'coverage':'sampled_incomplete_if_loss_or_interrupted','invalid_cs_events':invalid_cs,'incomplete_reports':incomplete,'cs_start_without_end':len(starts.keys()-ends.keys()),'cs_end_without_start':len(ends.keys()-starts.keys()),'cs_completed':len(completed),'block_offers':len(io),'block_offer_stage':'prequeue_offer_later_rejection_possible','file_range_overlaps':preparation,'block_range_overlaps':block,'temporal_thread_candidates':candidates,'limitations':'Block records are prequeue offers and may later be rejected; all records are bounded samples, loss counters may shift between adjacent intervals and the final partial interval is discarded on stop; absence of overlap is not evidence of absence; offers are not physical I/O; file offsets and block offsets are not a mapping; cache/asynchronous I/O and drops prevent causal attribution.'}
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('log',type=Path);a=p.parse_args();print(json.dumps(analyze(a.log.read_text(errors='replace')),indent=2))

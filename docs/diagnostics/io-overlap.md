@@ -36,7 +36,13 @@ the preparer and therefore is not counted as an I/O producer. Counters and
 records can be split across reports, and interrupted boots can lack an end.
 
 NativeMsdc independently reports up to 32 eligible verified read-only window
-offers per ten-second interval; see NativeMsdc README for details. Both streams
+offers per ten-second interval; see NativeMsdc README for details. Offers are
+recorded before queue admission and completion validation, so later rejection
+is possible; they are not accepted requests or completed transfers. Once the
+buffer is full, producers skip clock, PID/TID and record-lock work and increment
+an atomic loss counter. Full and contention counts are exact across quiescent
+drains but independent samples; boundary races can shift a loss to an adjacent
+interval. Both streams
 use `mach_absolute_time` converted to ns. Reporter output contributes overhead;
 32 records per stream per reporting interval are a hard line cap, not a complete
 census. The first records of a busy interval are favored. The finite buffers,
@@ -57,7 +63,10 @@ compares sampled offers from different execution threads in the same window.
 `temporal_thread_candidates` counts sampled same-PID/TID offers inside a prepare
 interval without a timing margin. It does not prove a mapping from file offsets
 to block offsets or causation. Missing matches mean unknown, not no I/O.
-Inspect every loss counter and incomplete frame before drawing conclusions.
+Inspect `coverage`, every loss counter, invalid CS event and incomplete frame
+before drawing conclusions. A missing overlap is never proof of absence, even
+when the reported loss counters are zero: capture is sampled and the reporter
+discards the final partial interval when stopped.
 
 Host checks use the pinned XNU checkout:
 
