@@ -1,9 +1,13 @@
 --- a/osfmk/arm64/machine_routines.c
 +++ b/osfmk/arm64/machine_routines.c
-@@ -361,6 +361,36 @@
+@@ -361,6 +361,40 @@
  	return ipending;
  }
  
++#if defined(XNU_PMUV3_ACTIVE) && XNU_PMUV3_ACTIVE
++#include "unixnu_pmuv3_backend.h"
++#endif
++
 +#if defined(XNU_ARMCPU_IDLE_EPOCH) && XNU_ARMCPU_IDLE_EPOCH
 +/* Per-CPU idle epoch; odd means inside machine_idle, UINT64_MAX poisoned.
 + * Weak CAS failure poisons rather than retrying. A mismatched transition permanently poisons
@@ -37,22 +41,28 @@
  void
  machine_idle(void)
  {
-@@ -368,6 +398,9 @@
+@@ -368,6 +402,12 @@
  	 * Idle_load_context()
  	 */
  	assert((__builtin_arm_rsr("DAIF") & (DAIF_IRQF | DAIF_FIQF)) == (DAIF_IRQF | DAIF_FIQF));
 +#if defined(XNU_ARMCPU_IDLE_EPOCH) && XNU_ARMCPU_IDLE_EPOCH
 +	unixnu_idle_epoch_transition(true);
 +#endif
++#if defined(XNU_PMUV3_ACTIVE) && XNU_PMUV3_ACTIVE
++	unixnu_pmuv3_idle_boundary(true);
++#endif
  	/* Check for, and act on, a WFE recommendation.
  	 * Bypasses context spill/fill for a minor perf. increment.
  	 * May unmask and restore IRQ+FIQ mask.
-@@ -379,6 +412,9 @@
+@@ -379,6 +419,12 @@
  		 */
  		Idle_context();
  	}
 +#if defined(XNU_ARMCPU_IDLE_EPOCH) && XNU_ARMCPU_IDLE_EPOCH
 +	unixnu_idle_epoch_transition(false);
++#endif
++#if defined(XNU_PMUV3_ACTIVE) && XNU_PMUV3_ACTIVE
++	unixnu_pmuv3_idle_boundary(false);
 +#endif
  	__builtin_arm_wsr("DAIFClr", (DAIFSC_IRQF | DAIFSC_FIQF));
  }
