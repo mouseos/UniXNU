@@ -335,3 +335,19 @@ also cover accumulated stage counters and the widened 48-record output budget.
 
 This is an experimental throughput comparison. No boot-time reduction or real
 hardware performance improvement is claimed until measured with a matching payload.
+
+#### 通常読みとバッチ読みの比較上の制約
+
+両経路とも署名付き16 KiBブロックを位置順に照合し、成功したブロックと
+同一の読み込みバッファから4 KiBハッシュを導出する。全ブロック成功と
+読み取り専用保護の前にハッシュ配列を公開しない。ただし、バッチ経路は
+最大256 KiBを一度に読み込んでから先頭の署名を照合する。したがって、
+後方の読み込みエラーと先頭側の署名不一致が同時にある場合のエラーの
+優先順位や、失敗までの読み込み量は16 KiB経路と異なり得る。
+
+`scripts/tests/check_native4k_page_validation.py --xnu-source /path/to/pinned/xnu`
+は固定XNUの実prepareと実ページ検証関数をSHA-256で実行し、通常・バッチの
+生成ハッシュ一致、各署名ブロックのデータと期待値の改変拒否、各完全4 KiB
+ページの改変検出を確認する。これはXNU実機上のI/O、キャッシュ整合性や
+性能を証明しない。通常読みに比べバッチは読み込み要求をまとめるが、
+署名付き範囲の読み込みとハッシュ計算を省略しない。
