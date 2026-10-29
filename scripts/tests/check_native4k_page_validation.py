@@ -10,6 +10,10 @@ def literal(name):return next(ast.literal_eval(n.value) for n in ast.walk(syntax
 pre=literal('pre');helpers=literal('main').split('int main(void)')[0]
 assert pre.count('struct cs_blob {const CS_CodeDirectory*csb_cd;') == 1
 pre=pre.replace('struct cs_blob {const CS_CodeDirectory*csb_cd;', 'struct cs_blob {struct cs_blob *csb_next;off_t csb_start_offset,csb_end_offset;size_t csb_mem_offset;const CS_CodeDirectory*csb_cd;')
+assert pre.count('reads++;read_bytes+=length;if((size_t)length>max_read)max_read=length;') == 1
+pre=pre.replace('reads++;read_bytes+=length;if((size_t)length>max_read)max_read=length;',
+                'reads++;read_bytes+=length;if((size_t)length>max_read)max_read=length; if (offset+(size_t)length>fail_from) return EACCES;')
+pre=pre.replace('static unsigned batch_flag', 'static size_t fail_from=(size_t)-1;\nstatic unsigned batch_flag', 1)
 pre+='''\ntypedef int boolean_t;typedef void *memory_object_t;typedef unsigned long long memory_object_offset_t;\n#define FALSE 0\n#define CS_VALIDATE_TAINTED 1\n#define CS_VALIDATE_NX 2\n#define CAST_DOWN(type,value) ((type)(value))\nstatic unsigned long cs_native4k_page_checks,cs_validate_page_no_hash;static int cs_debug;\n#define panic(...) abort()\n'''
 main=r'''
 int main(void){
@@ -48,6 +52,13 @@ int main(void){
    assert(cs_native4k_full_blocks==(unsigned)bad&&!blob.csb_native4k_hashes&&!cs_native4k_ready_blobs);
    dispose(&blob);
   }
+ }
+ for(int batch=0;batch<2;batch++){
+  reset();batch_present=1;batch_flag=batch;setup(32768,&cd,&blob);
+  expected_hashes[0]^=1;fail_from=16384;
+  assert(cs_native4k_prepare(&vnode,&blob)==(batch?EACCES:EBADEXEC));
+  assert(!blob.csb_native4k_hashes&&!cs_native4k_ready_blobs);
+  fail_from=(size_t)-1;dispose(&blob);
  }
  puts("PASS actual 16KiB and 256KiB preparers: equal derived hashes, every modified 4KiB page including tail tainted, every bad 16KiB block rejected before publication");
 }
