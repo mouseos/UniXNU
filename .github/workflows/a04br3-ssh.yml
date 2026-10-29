@@ -35,6 +35,10 @@ on:
         description: "Experimental GE8300 COLOR ROA for framebuffer-fetch pipelines; requires powervr_probe and powervr_metal"
         type: boolean
         default: false
+      iostat_stack_profile:
+        description: "Diagnostic-only iostat stack profile; requires the pinned ArmCpu source"
+        type: boolean
+        default: false
       keep_minutes:
         description: Minutes the runner stays after the first build (1 to 330)
         required: true
@@ -182,6 +186,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           A04BR3_POWERVR_METAL_MODE: ${{ inputs.powervr_metal_mode || 'selftest' }}
           A04BR3_POWERVR_METAL_ROA_COLOR: ${{ inputs.powervr_metal_roa_color && '1' || '0' }}
+          IOSTAT_STACK_PROFILE: ${{ inputs.iostat_stack_profile && '1' || '0' }}
         run: |
           set -euo pipefail
           if [ "$A04BR3_POWERVR_METAL_ROA_COLOR" = 1 ] && { [ "${{ inputs.powervr_probe }}" != true ] || [ "${{ inputs.powervr_metal }}" != true ]; }; then
@@ -198,6 +203,16 @@ jobs:
             echo "export A04BR3_DEVICE_REF='$(git -C device rev-parse HEAD)'"
             echo "export A04BR3_POWERVR_METAL_MODE='$A04BR3_POWERVR_METAL_MODE'"
             echo "export A04BR3_POWERVR_METAL_ROA_COLOR='$A04BR3_POWERVR_METAL_ROA_COLOR'"
+            echo "export IOSTAT_STACK_PROFILE='$IOSTAT_STACK_PROFILE'"
+            if [ "$IOSTAT_STACK_PROFILE" = 1 ]; then
+              expected_armcpu=85d06a5248a4516c777763d195866a2362e5d7b0
+              actual_armcpu="$(git rev-parse HEAD:drivers/ArmCpu)"
+              if [ "$actual_armcpu" != "$expected_armcpu" ]; then
+                echo "iostat_stack_profile requires ArmCpu gitlink $expected_armcpu; found $actual_armcpu" >&2
+                exit 1
+              fi
+              echo 'export XNU_IRQ_PC_STATS=1 XNU_MSDC_IRQ_WAIT=1 XNU_MSDC_IRQ_WORKER=1 XNU_MSDC_GIC_NS=1 XNU_PROCESS_EXIT_DIAG=1 XNU_ROOT_TIMING=1 XNU_IO_OVERLAP_TRACE=1 XNU_NATIVE_CS_HASH_CACHE=1'
+            fi
             echo 'METAL_KERNEL_ARGS=()'
             if [ "$A04BR3_POWERVR_METAL_MODE" = publish ]; then
               echo 'METAL_KERNEL_ARGS=(--kernel-arg sheng-fb-gpu=1)'
@@ -216,6 +231,14 @@ jobs:
           # /tmp/a04br3-rebuild.sh <UniXNU-a04br3 ref>: incremental kernel and payload of that ref, published to $RELEASE.
           set -euo pipefail
           source "$RUNNER_TEMP/a04br3.env"
+          if [ "$IOSTAT_STACK_PROFILE" = 1 ]; then
+            expected_armcpu=85d06a5248a4516c777763d195866a2362e5d7b0
+            actual_armcpu="$(git rev-parse HEAD:drivers/ArmCpu)"
+            if [ "$actual_armcpu" != "$expected_armcpu" ]; then
+              echo "iostat_stack_profile requires ArmCpu gitlink $expected_armcpu; found $actual_armcpu" >&2
+              exit 1
+            fi
+          fi
           [ -f "$RUNNER_TEMP/a04br3-data.env" ] && source "$RUNNER_TEMP/a04br3-data.env"
           git -C device fetch -q origin
           git -C device checkout -q --detach "${1:-$A04BR3_DEVICE_REF}"
