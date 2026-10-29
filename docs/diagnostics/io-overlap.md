@@ -1,8 +1,9 @@
 # Bounded signature-preparation and block-offer trace
 
 This diagnostic is opt-in and does not change verification. Build the kernel
-with `XNU_ROOT_TIMING=1 XNU_IO_OVERLAP_TRACE=1`; the latter defaults to 0 and
-requires the former. Boot with `native-io-trace=1` and enable the device's
+with `XNU_ROOT_TIMING=1 XNU_NATIVE_CS_HASH_CACHE=1 XNU_IO_OVERLAP_TRACE=1`; the latter
+defaults to 0 and requires both other flags. The a04br3 defconfig enables the
+signature hash cache. Boot with `native-io-trace=1` and enable the device's
 existing periodic reporter (a04br3: `pl=1`, ten seconds). Do not also enable
 `native-root-timing` merely to collect this trace: that separate, older
 instrumentation has different identity/telemetry properties. The image must
@@ -72,7 +73,7 @@ and run `tests/overlap-buffer.cpp` with C++17, pthreads and ASan/UBSan. These
 are host mocks, not an actual XNU, APFS, UART or device test.
 
 The reviewed a04br3 pairing is device commit
-`2039e09e8be1dcae62dd5cd24ded9d3ef9cea021` and its pinned ArmCpu commit
+`481ed49fafc444c6b5c2c6aa11a9fcfbec98ec99` and its pinned ArmCpu commit
 `85d06a5248a4516c777763d195866a2362e5d7b0`; the UniXNU gitlink pins the
 corresponding NativeMsdc commit. Both device and UniXNU branches are
 `wip/io-overlap-trace` in their respective mouseos repositories. Select these

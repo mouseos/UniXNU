@@ -877,8 +877,8 @@ if not stamp.exists() or stamp.read_text() != mode:
     stamp.write_text(mode)
 PYIRQ
 IO_OVERLAP_TRACE=${XNU_IO_OVERLAP_TRACE:-0}
-if [[ "$IO_OVERLAP_TRACE" != 0 && "$IO_OVERLAP_TRACE" != 1 ]] || [[ "$IO_OVERLAP_TRACE" == 1 && "$ROOT_TIMING" != 1 ]]; then
-  echo 'XNU_IO_OVERLAP_TRACE requires 0 or 1 and XNU_ROOT_TIMING=1 when enabled' >&2
+if [[ "$IO_OVERLAP_TRACE" != 0 && "$IO_OVERLAP_TRACE" != 1 ]] || [[ "$IO_OVERLAP_TRACE" == 1 && ( "$ROOT_TIMING" != 1 || "$CS_HASH_CACHE_MODE" != 1 ) ]]; then
+  echo 'XNU_IO_OVERLAP_TRACE requires 0 or 1 and XNU_ROOT_TIMING=1 and XNU_NATIVE_CS_HASH_CACHE=1 when enabled' >&2
   exit 1
 fi
 python3 - "$IO_OVERLAP_TRACE" <<'PYTRACE'
