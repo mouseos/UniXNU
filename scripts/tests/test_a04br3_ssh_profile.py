@@ -34,6 +34,14 @@ case "$*" in
 esac
 ''')
     git.chmod(0o755)
+    fake_python = tools/'python3'
+    fake_python.write_text('''#!/bin/sh
+[ "$XNU_IRQ_PC_STATS" = 1 ] && [ "$XNU_MSDC_IRQ_WAIT" = 1 ] &&
+[ "$XNU_MSDC_IRQ_WORKER" = 1 ] && [ "$XNU_MSDC_GIC_NS" = 1 ] &&
+[ "$XNU_PROCESS_EXIT_DIAG" = 1 ] && [ "$XNU_ROOT_TIMING" = 1 ] &&
+[ "$XNU_IO_OVERLAP_TRACE" = 1 ] && [ "$XNU_NATIVE_CS_HASH_CACHE" = 1 ]
+''')
+    fake_python.chmod(0o755)
     for probe, metal, roa, mode in itertools.product((False, True), (False, True), (False, True), ('selftest', 'publish')):
         generated = root / 'a04br3.env'
         generated.unlink(missing_ok=True)
@@ -83,6 +91,7 @@ esac
     gate = rebuild.split('          diagnostic_device=', 1)[1].split('          ./unixnu tree', 1)[0]
     gate = 'diagnostic_device=' + '\n'.join(line[10:] if line.startswith('          ') else line for line in gate.splitlines())
     for explicit, auto, armcpu, expected in [('0','0','85d06a5248a4516c777763d195866a2362e5d7b0','off'),
+                                             ('1','0','85d06a5248a4516c777763d195866a2362e5d7b0','on'),
                                              ('0','1','85d06a5248a4516c777763d195866a2362e5d7b0','on'),
                                              ('0','1','1951cc8444b340d7d8879e9418220cf29eb711d7','reject')]:
         env = dict(os.environ, PATH=str(tools)+os.pathsep+os.environ['PATH'], IOSTAT_STACK_PROFILE=explicit,

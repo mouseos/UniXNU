@@ -253,11 +253,14 @@ jobs:
           if [ "$IOSTAT_STACK_PROFILE" = 0 ] && git -C device cat-file -e "$diagnostic_device^{commit}" 2>/dev/null && git -C device merge-base --is-ancestor "$diagnostic_device" HEAD; then
             IOSTAT_STACK_PROFILE=1
             export IOSTAT_STACK_PROFILE
-            export XNU_IRQ_PC_STATS=1 XNU_MSDC_IRQ_WAIT=1 XNU_MSDC_IRQ_WORKER=1 XNU_MSDC_GIC_NS=1 XNU_PROCESS_EXIT_DIAG=1 XNU_ROOT_TIMING=1 XNU_IO_OVERLAP_TRACE=1 XNU_NATIVE_CS_HASH_CACHE=1
           fi
-          if [ "$IOSTAT_STACK_PROFILE" = 1 ] && [ "$(git rev-parse HEAD:drivers/ArmCpu)" != 85d06a5248a4516c777763d195866a2362e5d7b0 ]; then
-            echo 'iostat_stack_profile requires the pinned ArmCpu gitlink' >&2
-            exit 1
+          if [ "$IOSTAT_STACK_PROFILE" = 1 ]; then
+            export XNU_IRQ_PC_STATS=1 XNU_MSDC_IRQ_WAIT=1 XNU_MSDC_IRQ_WORKER=1 XNU_MSDC_GIC_NS=1 XNU_PROCESS_EXIT_DIAG=1 XNU_ROOT_TIMING=1 XNU_IO_OVERLAP_TRACE=1 XNU_NATIVE_CS_HASH_CACHE=1
+            if [ "$(git rev-parse HEAD:drivers/ArmCpu)" != 85d06a5248a4516c777763d195866a2362e5d7b0 ]; then
+              echo 'iostat_stack_profile requires the pinned ArmCpu gitlink' >&2
+              exit 1
+            fi
+            python3 scripts/check-xnu-effective-flags.py out/a04br3/.config --require XNU_IRQ_PC_STATS=1 --require XNU_MSDC_IRQ_WAIT=1 --require XNU_MSDC_IRQ_WORKER=1 --require XNU_MSDC_GIC_NS=1 --require XNU_PROCESS_EXIT_DIAG=1 --require XNU_ROOT_TIMING=1 --require XNU_IO_OVERLAP_TRACE=1 --require XNU_NATIVE_CS_HASH_CACHE=1
           fi
           ./unixnu tree -D "$GITHUB_WORKSPACE/device"
           # User-space probes and their owner trust cache are inputs too. Reuse the
@@ -289,6 +292,9 @@ jobs:
           set -euo pipefail
           source "$RUNNER_TEMP/a04br3.env"
           ./unixnu defconfig a04br3_defconfig -D "$DEVICE_DIR"
+          if [ "$IOSTAT_STACK_PROFILE" = 1 ]; then
+            python3 scripts/check-xnu-effective-flags.py out/a04br3/.config --require XNU_IRQ_PC_STATS=1 --require XNU_MSDC_IRQ_WAIT=1 --require XNU_MSDC_IRQ_WORKER=1 --require XNU_MSDC_GIC_NS=1 --require XNU_PROCESS_EXIT_DIAG=1 --require XNU_ROOT_TIMING=1 --require XNU_IO_OVERLAP_TRACE=1 --require XNU_NATIVE_CS_HASH_CACHE=1
+          fi
           ./unixnu fetch xnu libplatform libdispatch AvailabilityVersions libpthread corecrypto-2023 IOStorageFamily -D "$DEVICE_DIR"
           bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"
           echo "export XNU_OWNER_DATA_VOLUME_UUID=$(sed -n 's/^XNU_OWNER_DATA_VOLUME_UUID=//p' "$GITHUB_ENV" | tail -1)" > "$RUNNER_TEMP/a04br3-data.env"
