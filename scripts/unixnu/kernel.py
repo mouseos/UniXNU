@@ -130,6 +130,8 @@ def build(ctx, modules, reference_pass=None):
         except Error:
             if not record.is_file() or not filelist.is_file() or not filelist.read_text().strip() or missing_link_inputs(ctx.tree):
                 raise
+        if not record.is_file():
+            raise Error('XNU bootstrap did not generate the startup compile record')
         if not filelist.is_file() or not filelist.read_text().strip():
             raise Error('XNU bootstrap did not generate a nonempty link.filelist')
         missing = missing_link_inputs(ctx.tree)
