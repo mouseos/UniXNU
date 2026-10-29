@@ -29,7 +29,7 @@ int main(void){
   assert(hashbytes<=sizeof(baseline));
   if(!batch)memcpy(baseline,blob.csb_native4k_hashes,hashbytes);
   else assert(!memcmp(baseline,blob.csb_native4k_hashes,hashbytes));
-  if(!batch){uint8_t h[32];SHA256(blob.csb_native4k_hashes,hashbytes,h);printf("COMPARE hash ");for(int i=0;i<32;i++)printf("%02x",h[i]);putchar('\n');}
+  if(!batch){printf("COMPARE hash ");for(size_t i=0;i<hashbytes;i++)printf("%02x",blob.csb_native4k_hashes[i]);putchar('\n');}
   size_t fullpages=input_size/4096;
   for(size_t page=0;page<fullpages;page++){
    vm_size_t bytes=0;unsigned taint=0;
