@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run actual native4k preparer with real SHA-256 and bounded I/O/VM API mocks."""
 from pathlib import Path
-import argparse,subprocess,tempfile,tomllib
+import argparse,os,subprocess,tempfile,tomllib
 R=Path(__file__).resolve().parents[2]
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--xnu-source',type=Path,default=R/'refer/xnu');args=p.parse_args();feed=args.xnu_source.resolve()
 rev=next(x['commit'] for x in tomllib.loads((R/'feeds.toml').read_text())['source'] if x.get('kind')=='refer' and x.get('name')=='xnu')
@@ -38,6 +38,7 @@ pre=r'''
 #define VM_PROT_READ 1
 #define TRUE 1
 #define Z_WAITOK 1
+#define IO_NOCACHE 0x0800
 #define UIO_READ 0
 #define UIO_SYSSPACE 0
 #define MIN(a,b) ((a)<(b)?(a):(b))
@@ -51,10 +52,12 @@ typedef struct {uint32_t version,scatterOffset,codeLimit,nCodeSlots;uint64_t cod
 struct cs_blob {const CS_CodeDirectory*csb_cd;const struct cs_hash*csb_hashtype;unsigned csb_hash_pageshift,csb_hash_firstlevel_pageshift;off_t csb_base_offset;const void*csb_mem_kaddr;size_t csb_mem_size;const uint8_t*csb_native4k_hashes;size_t csb_native4k_hashes_size,csb_native4k_hash_count;};
 struct vnode{int readonly;};typedef struct vnode*vnode_t;
 struct proc{int pid;uint64_t uid;};typedef struct proc*proc_t;
+static unsigned stream_flag; static int stream_present;
 static unsigned batch_flag,root_flag=1,overlap_flag;static int batch_present,root_present=1;
 static unsigned clocks,identity_reads,timing_records;static uint64_t ticks,reported[5];static int reported_batched;
 static uint8_t *input,*snapshot,*expected_hashes;static size_t input_size,read_size,scratch_size;
 static size_t reads,read_bytes,max_read,original_hashes,derived_hashes;
+static int fail_large;
 static int scratch_live,storage_live,protects,fail_storage,fail_scratch,fail_protect,fail_round;
 static int read_error_call,resid_call,null_hash_index=-1,corrupt_hash_index=-1,mutate_after_read;
 static off_t file_base;static struct cs_blob*observed_blob;static void*storage_pointer;
@@ -64,7 +67,7 @@ static void sha_init(union cs_hash_union*c){SHA256_Init(&c->sha);}
 static void sha_update(union cs_hash_union*c,const void*b,size_t n){SHA256_Update(&c->sha,b,n);}
 static void sha_final(void*out,union cs_hash_union*c){SHA256_Final(out,&c->sha);}
 static struct cs_hash md={32,32,sha_init,sha_update,sha_final};
-static int PE_parse_boot_argn(const char*n,void*out,size_t z){assert(z==sizeof(unsigned));if(!strcmp(n,"native-cs-read-batch")){*(unsigned*)out=batch_flag;return batch_present;}if(!strcmp(n,"native-io-trace")){*(unsigned*)out=overlap_flag;return 1;}assert(!strcmp(n,"native-root-timing"));*(unsigned*)out=root_flag;return root_present;}
+static int PE_parse_boot_argn(const char*n,void*out,size_t z){assert(z==sizeof(unsigned));if(!strcmp(n,"native-cs-read-batch")){*(unsigned*)out=batch_flag;return batch_present;}if(!strcmp(n,"native-cs-stream")){*(unsigned*)out=stream_flag;return stream_present;}if(!strcmp(n,"native-io-trace")){*(unsigned*)out=overlap_flag;return 1;}assert(!strcmp(n,"native-root-timing"));*(unsigned*)out=root_flag;return root_present;}
 static proc_t current_proc(void){static struct proc p={2,102};return &p;}
 static int proc_getpid(proc_t p){identity_reads++;return p->pid;}
 static uint64_t proc_uniqueid(proc_t p){identity_reads++;return p->uid;}
@@ -78,13 +81,13 @@ static uint64_t thread_tid(void *t){(void)t;return 102;}
 static int round_page_overflow(size_t n,size_t*out){if(fail_round)return 1;return __builtin_add_overflow(n,(size_t)4095,out)?1:(*out&=~(size_t)4095,0);}
 static int kmem_alloc(int map,uintptr_t*out,size_t n,int flags,int tag){(void)map;(void)flags;(void)tag;if(fail_storage)return 1;assert(!storage_live);*out=(uintptr_t)calloc(1,n);assert(*out);storage_pointer=(void*)*out;storage_live=1;return 0;}
 static void kmem_free(int map,uintptr_t addr,size_t n){(void)map;(void)n;assert(storage_live&&(void*)addr==storage_pointer);free((void*)addr);storage_pointer=NULL;storage_live=0;}
-static void*kalloc_data(size_t n,int f){(void)f;if(fail_scratch)return NULL;assert(!scratch_live);scratch_size=n;scratch_live=1;uint8_t*p=malloc(n);assert(p);memset(p,0xa5,n);return p;}
+static void*kalloc_data(size_t n,int f){(void)f;if(fail_scratch||(fail_large&&n==1048576))return NULL;assert(!scratch_live);scratch_size=n;scratch_live=1;uint8_t*p=malloc(n);assert(p);memset(p,0xa5,n);return p;}
 static void kfree_data(void*p,size_t n){assert(p&&scratch_live&&n==scratch_size);scratch_live=0;free(p);}
 static int vfs_context_current(void){return 0;}
 static int vfs_context_ucred(int c){return c;}
 static int vn_rdwr(int op,vnode_t v,char*buffer,int length,off_t position,int space,int flags,int cred,int*resid,proc_t p){
- (void)op;(void)v;(void)space;(void)flags;(void)cred;(void)p;
- assert(!observed_blob->csb_native4k_hashes&&length>0&&(unsigned)length<=262144);
+ (void)op;assert(flags==((v->readonly&&stream_present&&stream_flag==1&&input_size>32ULL*1024*1024)?IO_NOCACHE:0));(void)space;(void)cred;(void)p;
+ assert(!observed_blob->csb_native4k_hashes&&length>0&&(unsigned)length<=1048576);
  assert(position>=file_base);uint64_t offset=(uint64_t)(position-file_base);assert(offset<=input_size&&(uint64_t)length<=input_size-offset);
  reads++;read_bytes+=length;if((size_t)length>max_read)max_read=length;
  if(read_error_call==(int)reads)return EACCES;
@@ -127,17 +130,51 @@ static void check_telemetry(int batched){int active=0;
 }
 int main(void){
 const size_t limits[]={1,4095,4096,4097,16383,16384,16385,262143,262144,262145,524288+4099};
+for(stream_present=0;stream_present<2;stream_present++)for(stream_flag=0;stream_flag<4;stream_flag++)
 for(int exists=0;exists<2;exists++)for(unsigned value=0;value<4;value++)for(int ro=0;ro<2;ro++)for(size_t i=0;i<sizeof(limits)/sizeof(limits[0]);i++){
  reset();batch_present=exists;batch_flag=value;CS_CodeDirectory cd;struct cs_blob blob;setup(limits[i],&cd,&blob);struct vnode v={ro};
- int batched=exists&&value==1&&ro;size_t chunk=batched?262144:16384;
+ int batched=exists&&value==1&&ro;int streamed=stream_present&&stream_flag==1&&ro;size_t chunk=streamed?1048576:batched?262144:16384;
  assert(!cs_native4k_prepare(&v,&blob));assert(reads==(input_size+chunk-1)/chunk&&read_bytes==input_size&&max_read<=chunk);
  assert(scratch_size==chunk&&protects==1&&cs_native4k_ready_blobs==1&&blob.csb_native4k_hash_count==(input_size+4095)/4096);
- check_telemetry(batched);
+ check_telemetry(batched&&!streamed);
 #if XNU_ROOT_TIMING
  if(root_flag==1){assert(reported[1]==((input_size+16383)/16384)*10&&reported[2]==((input_size+4095)/4096)*10);}
 #endif
  dispose(&blob);
 }
+/* Exact upstream threshold, tails, and first/last failure with no publication. */
+for(int delta=-1;delta<=1;delta++)for(int fault=0;fault<3;fault++){
+ reset();stream_present=stream_flag=1;batch_present=batch_flag=1;
+ CS_CodeDirectory cd;struct cs_blob blob;struct vnode v={1};setup(32ULL*1024*1024+delta,&cd,&blob);
+ if(fault==1)expected_hashes[((input_size-1)/16384)*md.cs_size]^=1;
+ if(fault==2)resid_call=(input_size+1048575)/1048576;
+ int result=cs_native4k_prepare(&v,&blob);
+ assert(result==(fault==1?EBADEXEC:fault==2?EIO:0));
+ assert(max_read<=1048576&&scratch_size==1048576);
+ assert(fault?(!protects&&!blob.csb_native4k_hashes):protects==1);
+ check_telemetry(0);dispose(&blob);
+}
+/* Large-file flag gate must remain strict on both mount types. */
+for(int present=0;present<2;present++)for(unsigned value=0;value<4;value++)for(int ro=0;ro<2;ro++){
+ reset();stream_present=present;stream_flag=value;batch_present=batch_flag=1;
+ CS_CodeDirectory cd;struct cs_blob blob;struct vnode v={ro};setup(32ULL*1024*1024+1,&cd,&blob);
+ assert(!cs_native4k_prepare(&v,&blob));
+ size_t chunk=ro?(present&&value==1?1048576:262144):16384;
+ assert(scratch_size==chunk&&reads==(input_size+chunk-1)/chunk);
+ check_telemetry(chunk==262144);dispose(&blob);
+}
+reset();stream_present=stream_flag=1;fail_large=1;
+{CS_CodeDirectory cd;struct cs_blob blob;struct vnode v={1};setup(32ULL*1024*1024+1,&cd,&blob);
+ assert(!cs_native4k_prepare(&v,&blob)&&scratch_size==16384&&max_read==16384);
+ check_telemetry(0);dispose(&blob);}
+for(int both=0;both<2;both++){
+ reset();stream_present=stream_flag=1;fail_large=1;fail_scratch=both;
+ CS_CodeDirectory cd;struct cs_blob blob;struct vnode v={1};setup(16385,&cd,&blob);
+ assert(cs_native4k_prepare(&v,&blob)==(both?ENOMEM:0));
+ assert(both?(!reads&&!protects&&!blob.csb_native4k_hashes):scratch_size==16384);
+ check_telemetry(0);dispose(&blob);
+}
+fail_large=0;stream_present=stream_flag=0;
 /* Real truncated SHA-256 strides, tail and same-buffer derivation after backing mutation. */
 reset();batch_flag=batch_present=1;md.cs_size=20;CS_CodeDirectory cd;struct cs_blob blob;setup(262144+123,&cd,&blob);struct vnode v={1};mutate_after_read=1;assert(!cs_native4k_prepare(&v,&blob));assert(memcmp(input,snapshot,input_size));check_telemetry(1);dispose(&blob);md.cs_size=32;
 /* Corruption anywhere, including later original blocks in one batch, never publishes. */
@@ -187,6 +224,7 @@ assert(native_cs_trace.events[1].bytes==32769 && native_cs_trace.events[1].reads
 dispose(&trace_blob);overlap_flag=0;
 #endif
 puts("PASS actual preparer + real SHA256: strict/default/readonly gates, 4K/16K/256K boundaries, partial tails, digest strides, same-buffer derivation, every corrupt block, read/resid/nullhash/alloc/protect/overflow failures without publication, compatibility and gated read/original/derived timing");}
+
 '''
 with tempfile.TemporaryDirectory(prefix='native4k-batch-') as directory:
  t=Path(directory);f='bsd/kern/ubc_subr.c';out=t/f;out.parent.mkdir(parents=True);out.write_bytes(subprocess.check_output(['git','-C',str(feed),'show',rev+':'+f]))
@@ -204,12 +242,12 @@ with tempfile.TemporaryDirectory(prefix='native4k-batch-') as directory:
  libs=subprocess.check_output(['pkg-config','--cflags','--libs','openssl'],text=True).split()
  for timing in (0,1):
   (t/'test.c').write_text(pre+body+main)
-  subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-unused-variable','-Wno-misleading-indentation','-Wno-deprecated-declarations','-fsanitize=address,undefined','-fno-pie','-no-pie','-DXNU_ROOT_TIMING='+str(timing),str(t/'test.c'),'-o',str(t/'test'),*libs],check=True)
-  subprocess.run([str(t/'test')],check=True,timeout=30)
+  subprocess.run([os.environ.get('CC','cc'),'-std=gnu11','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-unused-variable','-Wno-misleading-indentation','-Wno-deprecated-declarations','-fsanitize=address,undefined','-fno-pie','-no-pie','-DXNU_ROOT_TIMING='+str(timing),str(t/'test.c'),'-o',str(t/'test'),*libs],check=True)
+  subprocess.run([str(t/'test')],check=True,timeout=120)
 
  # Exercise the real prepare loop with the tracing implementation enabled.
  real=s[a:end].replace('#include <pexpert/pexpert.h>','')
  (t/'test.c').write_text(pre+real+main)
- subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-unused-variable','-Wno-misleading-indentation','-Wno-deprecated-declarations','-fsanitize=address,undefined','-fno-pie','-no-pie','-DXNU_ROOT_TIMING=1','-DXNU_IO_OVERLAP_TRACE=1',str(t/'test.c'),'-o',str(t/'test'),*libs],check=True)
- subprocess.run([str(t/'test')],check=True,timeout=30)
+ subprocess.run([os.environ.get('CC','cc'),'-std=gnu11','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-unused-variable','-Wno-misleading-indentation','-Wno-deprecated-declarations','-fsanitize=address,undefined','-fno-pie','-no-pie','-DXNU_ROOT_TIMING=1','-DXNU_IO_OVERLAP_TRACE=1',str(t/'test.c'),'-o',str(t/'test'),*libs],check=True)
+ subprocess.run([str(t/'test')],check=True,timeout=120)
  print('PASS actual traced prepare loop with real SHA-256 and entry/exit range')

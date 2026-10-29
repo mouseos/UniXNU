@@ -1,0 +1,38 @@
+diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
+--- a/bsd/kern/ubc_subr.c
++++ b/bsd/kern/ubc_subr.c
+@@ -6078,6 +6078,7 @@
+ 	uint64_t limit, offset;
+ 	int error = EBADEXEC;
+ 	kern_return_t kr;
++	int read_flags = 0; unsigned stream_flag = 0;
+ 	unsigned read_size = 16384, batch_flag = 0;
+ 	struct native_cs_io_timing io_timing = native_cs_io_begin();
+ 	struct native_cs_trace_event cs_trace = {0};
+@@ -6114,7 +6115,17 @@
+ 		return ENOMEM;
+ 	}
+ 	if (vnode_vfsisrdonly(vp) && PE_parse_boot_argn("native-cs-read-batch", &batch_flag, sizeof(batch_flag)) && batch_flag == 1) read_size = 256 * 1024;
++	/* Optional one-pass scan; retain authentication and error handling. */
++	if (vnode_vfsisrdonly(vp) &&
++	    PE_parse_boot_argn("native-cs-stream", &stream_flag, sizeof(stream_flag)) && stream_flag == 1) {
++		read_size = 1024 * 1024;
++		if (limit > 32ULL * 1024 * 1024) read_flags = IO_NOCACHE;
++	}
+ 	buffer = kalloc_data(read_size, Z_WAITOK);
++	if (buffer == NULL && read_size == 1024 * 1024) {
++		read_size = 16384;
++		buffer = kalloc_data(read_size, Z_WAITOK);
++	}
+ 	if (buffer == NULL) { error = ENOMEM; goto out; }
+ 	cs_trace = native_cs_trace_begin(vp, (uint64_t)blob->csb_base_offset);
+ 	for (offset = 0; offset < limit;) {
+@@ -6133,7 +6144,7 @@
+ 		native_cs_io_read(&io_timing, length);
+ 		uint64_t stamp = native_cs_io_start(&io_timing);
+ 		error = vn_rdwr(UIO_READ, vp, (caddr_t)buffer, (int)length, position,
+-		    UIO_SYSSPACE, 0, vfs_context_ucred(vfs_context_current()),
++		    UIO_SYSSPACE, read_flags, vfs_context_ucred(vfs_context_current()),
+ 		    &resid, current_proc());
+ 		native_cs_io_elapsed(&io_timing, 0, stamp);
+ 		if (error || resid) { error = error ? error : EIO; goto out; }
