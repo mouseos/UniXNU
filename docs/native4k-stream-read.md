@@ -11,7 +11,8 @@ previous policy. Each read is at most 1MiB; signed ranges strictly above 32MiB
 use `IO_NOCACHE`. Smaller files remain cached for their imminent executable
 faults. This selector takes precedence over the existing 256KiB selector.
 If the optional 1MiB scratch allocation fails, retry with the original 16KiB
-scratch; failure of both retains the existing ENOMEM result.
+scratch; failure of both retains the existing ENOMEM result. The large-file
+`IO_NOCACHE` selection remains in effect after the fallback.
 No global vnode cache flags, VM purge, persistent hash cache or device policy is
 changed. Writable mounts retain the existing baseline behavior.
 

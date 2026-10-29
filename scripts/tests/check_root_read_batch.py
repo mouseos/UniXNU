@@ -221,7 +221,13 @@ CS_CodeDirectory trace_cd;struct cs_blob trace_blob;struct vnode trace_v={1};set
 assert(!cs_native4k_prepare(&trace_v,&trace_blob));assert(native_cs_trace.n==2);
 assert(native_cs_trace.events[0].end==0 && native_cs_trace.events[1].end!=0);
 assert(native_cs_trace.events[1].bytes==32769 && native_cs_trace.events[1].reads==3 && native_cs_trace.events[1].error==0);
-dispose(&trace_blob);overlap_flag=0;
+dispose(&trace_blob);
+reset();overlap_flag=1;stream_flag=stream_present=1;native_cs_trace.n=0;
+setup(32ULL*1024*1024+1,&trace_cd,&trace_blob);
+assert(!cs_native4k_prepare(&trace_v,&trace_blob));
+assert(native_cs_trace.n==2 && native_cs_trace.events[1].bytes==32ULL*1024*1024+1);
+assert(native_cs_trace.events[1].reads==33 && native_cs_trace.events[1].error==0 && max_read==1048576);
+dispose(&trace_blob);overlap_flag=0;stream_flag=stream_present=0;
 #endif
 puts("PASS actual preparer + real SHA256: strict/default/readonly gates, 4K/16K/256K boundaries, partial tails, digest strides, same-buffer derivation, every corrupt block, read/resid/nullhash/alloc/protect/overflow failures without publication, compatibility and gated read/original/derived timing");}
 
