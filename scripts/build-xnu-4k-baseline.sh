@@ -933,8 +933,8 @@ PYIPI
 PMUV3_ACTIVE=${XNU_PMUV3_ACTIVE:-0}
 if [[ "$PMUV3_ACTIVE" != 0 && "$PMUV3_ACTIVE" != 1 ]]; then echo 'XNU_PMUV3_ACTIVE must be 0 or 1' >&2; exit 1; fi
 if [[ "$PMUV3_ACTIVE" == 1 ]]; then
-  cmp -s pmuv3/unixnu_pmuv3_active.h .cache/xnu-work/osfmk/arm64/unixnu_pmuv3_active.h || cp pmuv3/unixnu_pmuv3_active.h .cache/xnu-work/osfmk/arm64/unixnu_pmuv3_active.h
-  cmp -s pmuv3/backend.h .cache/xnu-work/osfmk/arm64/unixnu_pmuv3_backend.h || cp pmuv3/backend.h .cache/xnu-work/osfmk/arm64/unixnu_pmuv3_backend.h
+  cmp -s scripts/pmuv3/unixnu_pmuv3_active.h .cache/xnu-work/osfmk/arm64/unixnu_pmuv3_active.h || cp scripts/pmuv3/unixnu_pmuv3_active.h .cache/xnu-work/osfmk/arm64/unixnu_pmuv3_active.h
+  cmp -s scripts/pmuv3/backend.h .cache/xnu-work/osfmk/arm64/unixnu_pmuv3_backend.h || cp scripts/pmuv3/backend.h .cache/xnu-work/osfmk/arm64/unixnu_pmuv3_backend.h
 fi
 IDLE_EPOCH=${XNU_ARMCPU_IDLE_EPOCH:-0}
 if [[ "$IDLE_EPOCH" != 0 && "$IDLE_EPOCH" != 1 ]]; then
