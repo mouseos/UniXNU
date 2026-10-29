@@ -113,8 +113,10 @@ def build(ctx, modules, reference_pass=None):
     if prelink_spec.get('slide') is not None:
         env['UNIXNU_PRELINK_SLIDE'] = str(prelink_spec['slide'])
     record = ctx.tree / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/startup.o.json'
+    filelist = ctx.tree / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/link.filelist'
+    valid_filelist = filelist.is_file() and any(line.strip() for line in filelist.read_text().splitlines())
     missing = missing_link_inputs(ctx.tree)
-    if not record.is_file() or missing:
+    if not record.is_file() or not valid_filelist or missing:
         if missing:
             log(f'kernel: {len(missing)} missing XNU link inputs; regenerating with bootstrap')
         # The archive builders and the boot progress layer read compile records of the XNU build, which only an earlier
@@ -126,8 +128,10 @@ def build(ctx, modules, reference_pass=None):
         try:
             run(['bash', script], cwd=ctx.tree, env=subprocess_env, log_file=ctx.logs / 'kernel-bootstrap.log')
         except Error:
-            if not record.is_file() or missing_link_inputs(ctx.tree):
+            if not record.is_file() or not filelist.is_file() or not filelist.read_text().strip() or missing_link_inputs(ctx.tree):
                 raise
+        if not filelist.is_file() or not filelist.read_text().strip():
+            raise Error('XNU bootstrap did not generate a nonempty link.filelist')
         missing = missing_link_inputs(ctx.tree)
         if missing:
             raise Error(f'XNU bootstrap left {len(missing)} missing link inputs: {missing[0]}')

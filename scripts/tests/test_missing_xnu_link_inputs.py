@@ -36,3 +36,19 @@ with tempfile.TemporaryDirectory() as temp:
   kernel.build(ctx,{})
  assert calls==['bootstrap','archives','build'],calls
 print('PASS actual build ordering: bootstrap regenerates missing object before archives')
+
+with tempfile.TemporaryDirectory() as temp:
+ root=Path(temp);obj=root/'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837';record=obj/'osfmk/DEVELOPMENT/startup.o.json';record.parent.mkdir(parents=True);record.write_text('{}')
+ (root/'scripts').mkdir();(root/'scripts/build-xnu-4k-baseline.sh').write_text('')
+ class Ctx:
+  tree=root;logs=root;jobs=1;board={'kernel':{}}
+  def need_config(self):return {}
+ calls=[]
+ def run_fake(command,**kwargs):
+  calls.append('bootstrap' if kwargs['env'].get('XNU_BOOTSTRAP')=='1' else 'build')
+  if calls[-1]=='bootstrap':
+   generated=obj/'generated.o';generated.write_bytes(b'object');(obj/'link.filelist').write_text(str(generated)+'\n')
+ def archives_fake(ctx,env):calls.append('archives')
+ with patch.object(kernel,'tool'),patch.object(kernel,'version_env',return_value={}),patch.object(kernel,'run',side_effect=run_fake),patch.object(kernel,'build_archives',side_effect=archives_fake):kernel.build(Ctx(),{})
+ assert calls==['bootstrap','archives','build'],calls
+print('PASS missing link.filelist triggers bootstrap')
