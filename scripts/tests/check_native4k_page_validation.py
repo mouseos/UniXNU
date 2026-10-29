@@ -20,7 +20,7 @@ int main(void){
  CS_CodeDirectory cd;struct cs_blob blob;struct vnode vnode={1};
  unsigned char baseline[32*72];
  for(int batch=0;batch<2;batch++){
-  reset();batch_present=1;batch_flag=batch;setup(17*16384+123,&cd,&blob);
+  reset();batch_present=batch;batch_flag=batch;setup(17*16384+123,&cd,&blob);
   blob.csb_start_offset=0;blob.csb_end_offset=input_size;
   assert(!cs_native4k_prepare(&vnode,&blob));
   assert(blob.csb_native4k_hashes&&cs_native4k_full_blocks==18);
@@ -50,7 +50,7 @@ int main(void){
   if(!batch)printf("COMPARE tail %zu %u\n",(size_t)tailbytes,tailtaint);
   assert(cs_validate_page_bad_hash==fullpages+1);dispose(&blob);
   for(int variant=0;variant<2;variant++)for(int bad=0;bad<18;bad++){
-   reset();batch_present=1;batch_flag=batch;setup(17*16384+123,&cd,&blob);
+   reset();batch_present=batch;batch_flag=batch;setup(17*16384+123,&cd,&blob);
    if(variant)input[bad*16384]^=1;else expected_hashes[bad*md.cs_size]^=1;
    int result=cs_native4k_prepare(&vnode,&blob);assert(result==EBADEXEC);
    if(!batch)printf("COMPARE corrupt %d %d %d %zu\n",variant,bad,result,reads);
@@ -80,7 +80,7 @@ int main(void){
   dispose(&blob);
  }
  for(int batch=0;batch<2;batch++){
-  reset();batch_present=1;batch_flag=batch;setup(32768,&cd,&blob);
+  reset();batch_present=batch;batch_flag=batch;setup(32768,&cd,&blob);
   expected_hashes[0]^=1;fail_from=16384;
   assert(cs_native4k_prepare(&vnode,&blob)==(batch?EACCES:EBADEXEC));
   assert(!blob.csb_native4k_hashes&&!cs_native4k_ready_blobs);
@@ -92,10 +92,23 @@ int main(void){
 with tempfile.TemporaryDirectory() as d:
  t=pathlib.Path(d);f='bsd/kern/ubc_subr.c';out=t/f;out.parent.mkdir(parents=True);out.write_bytes(subprocess.check_output(['git','-C',str(a.xnu_source),'show',rev+':'+f]))
  before_batch=None
+ after_batch_helper=None
+ later_helper_changes=[]
+ def helper_text(text):
+  marker='static int\ncs_native4k_prepare('
+  if marker not in text:return None
+  start=text.index(marker);end=text.index('\n}\n',start)+2
+  return text[start:end]
  for patch in [*sorted((R/'patches/xnu').glob('*.patch')),*sorted((R/'kits/NativePrelink/patches').glob('*.patch'))]:
   if patch.name=='zzx-native4k-read-batch.patch':before_batch=out.read_text()
   subprocess.run(['git','apply','--include='+f,str(patch)],cwd=t,check=True)
+  if before_batch is not None:
+   now=helper_text(out.read_text())
+   if after_batch_helper is not None and now!=after_batch_helper:later_helper_changes.append(patch.name)
+   after_batch_helper=now
  assert before_batch is not None
+ assert later_helper_changes==['zzzz-native-io-overlap.patch'], later_helper_changes
+ print('PASS helper changes after batch patch: '+', '.join(later_helper_changes)+'; comparison builds trace disabled')
  source=out.read_text();start=source.index('/* Optional profiling of the eager');fn=source.index('static int\ncs_native4k_prepare(',start);end=source.index('\n}\n',fn)+2
  body=source[start:end].replace('#include <pexpert/pexpert.h>','')
  start=source.index('static boolean_t\ncs_validate_hash(',end);end=source.index('\n}\n',start)+2;validator=source[start:end]
@@ -122,4 +135,4 @@ with tempfile.TemporaryDirectory() as d:
   result=subprocess.run([str(t/'original')],check=True,timeout=30,capture_output=True,text=True)
   original_values=[line for line in result.stdout.splitlines() if line.startswith('COMPARE ')]
   assert len(original_values)>100 and original_values==comparisons[timing], 'original/default-off values differ'
-  print('PASS original/default-off hash, page taints and fault results directly equal; timing='+str(timing))
+  print('PASS original/absent-selector hash, page taints and fault results directly equal; compile timing='+str(timing))
