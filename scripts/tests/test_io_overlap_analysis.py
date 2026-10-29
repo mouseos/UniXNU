@@ -24,6 +24,9 @@ assert 'busy' not in r['loss']['NativeMsdc'] and r['coverage']=='sampled_incompl
 assert m.analyze(text+'NativeMsdc overlap stopped final_interval_unreported=1\n')['stopped_with_unreported_final_interval']==1
 assert m.analyze('')['missing_streams']==['CS','NativeMsdc'] and m.analyze('')['streams_not_seen']==['CS','NativeMsdc']
 assert not r['full_capture_proven']
+try:m.analyze('[pmic6392_init] Preloader Start\n[pmic6392_init] Preloader Start\n'+text)
+except ValueError:pass
+else:raise AssertionError('must refuse multiple preloader starts')
 try:m.parse(text+text)
 except ValueError:pass
 else:raise AssertionError('must refuse multiple boots')

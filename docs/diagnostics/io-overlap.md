@@ -56,7 +56,8 @@ python3 scripts/analyze-io-overlap.py path/to/uart.log
 ```
 
 Only complete framed reports are consumed; multiple boots with repeated report
-sequence numbers are refused. `file_range_overlaps` compares offered contiguous
+sequence numbers are refused. Two a04br3 preloader-start markers are also
+refused, but a capture that misses boot markers may still combine boots. `file_range_overlaps` compares offered contiguous
 file ranges for completed preparations sharing one boot-local ID; it states
 whether their execution intervals overlap and includes errors. `block_range_overlaps`
 compares sampled offers from different execution threads in the same window,
