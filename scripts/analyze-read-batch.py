@@ -11,17 +11,34 @@ TAGS={'sig':('c','b','w','e','rc','rn'), 'add':('rb','ac','ab','an','bc','be'),
       'phase':('ic','in','pre','mc','mn','post'), 'vnode':('cross','drop','a','v','o','peer'),
       'prep':('pc','pb','pn','pe','hit'), 'hash':('rc','rb','rn','on','dn','bat')}
 TOKEN=re.compile(r'([a-z]+)=([0-9a-f]+)\Z')
-BEGIN=re.compile(r'root timing begin pid=(\d+) comm=([^\s]+) ns=(\d+)')
+BEGIN=re.compile(r'root timing begin pid=(\d{1,20}) comm=([^\s]+) ns=(\d{1,20}) files=(\d{1,20}) mappings=(\d{1,20})')
 ANCHOR=b'[pmic6392_init] Preloader Start'
-REASON=re.compile(rb'(?i)\bBOOT_REASON[ \t]*[:=][ \t]*(0[xX][0-9a-fA-F]+|\d+)(?![0-9A-Za-z])')
-REASON_MARK=re.compile(rb'(?i)\bBOOT_REASON\s*[:=]')
-PANIC=re.compile(rb'(?i)(?:panic\s*\(|kernel panic)')
-EL3=re.compile(rb'(?i)(?:EL3[^\r\n]{0,60}exception|exception[^\r\n]{0,60}EL3)')
+REASON=re.compile(rb'(?i)\bBOOT_REASON[ \t]*[:=][ \t]*(0[xX][0-9a-fA-F]{1,16}|[0-9]{1,20})[ \t\r]*\n')
+REASON_MARK=re.compile(rb'(?i)\bBOOT_REASON[ \t]*[:=]')
+PANIC=re.compile(rb'(?i)(?:panic[ \t]*(?:\(|:)|kernel panic)')
+EL3=re.compile(rb'(?i)(?:EL3[^\r\n]{0,60}(?:exception|abort|serror)|(?:exception|abort|serror)[^\r\n]{0,60}EL3|\bESR_EL3[ \t]*[:=])')
 STORAGE_FIELDS=('read_calls','read_requested_bytes','read_ns','verify_calls','verify_bytes','verify_ns','read_total_ns','verify_total_ns')
-END=re.compile(r'root timing end pid=(\d+) comm=([^\s]+) elapsed_ns=(\d+) error=(-?\d+) kr=(-?\d+)')
+END=re.compile(r'root timing end pid=(\d{1,20}) comm=([^\s]+) elapsed_ns=(\d{1,20}) error=(-?\d{1,20}) kr=(-?\d{1,20})' + ''.join(r' '+key+r'=(\d{1,20})' for key in STORAGE_FIELDS))
 
 
 def sha(data):return hashlib.sha256(data).hexdigest()
+
+
+def strict_json(data):
+    def unique(pairs):
+        out={}
+        for key,value in pairs:
+            if key in out:raise ValueError('duplicate JSON key: '+key)
+            out[key]=value
+        return out
+    return json.loads(data,object_pairs_hook=unique)
+
+
+def has_truncated_events(value):
+    if isinstance(value,dict):
+        return value.get('truncated') is True or any(has_truncated_events(v) for v in value.values())
+    if isinstance(value,list):return any(has_truncated_events(v) for v in value)
+    return False
 
 
 def parse_log(data):
@@ -29,10 +46,12 @@ def parse_log(data):
     lines=data.split(b'\n')
     for i,part in enumerate(lines):
         raw=part+(b'\n' if i<len(lines)-1 else b'')
+        if re.search(rb'(?<!\s)RST (?:sig|add|phase|vnode|prep|hash)\b',raw) and not raw.startswith(b'RST '):
+            errors.append('prefixed_rst_record');continue
         if re.search(rb'(?<!\S)RST ',raw):
             if not raw.endswith(b'\n') or len(re.findall(rb'(?<!\S)RST ',raw))!=1:
                 errors.append('truncated_or_concatenated_rst');continue
-            if raw[:raw.index(b'RST ')].strip():errors.append('prefixed_rst_record')
+            if raw[:raw.index(b'RST ')].strip():errors.append('prefixed_rst_record');continue
             try: line=raw[raw.index(b'RST '):].rstrip(b'\r\n').decode('ascii')
             except UnicodeDecodeError:errors.append('non_ascii_rst');continue
             parts=line.split();
@@ -51,12 +70,16 @@ def parse_log(data):
             key=(values['q'],values['p'],values['u']);bucket=records.setdefault(key,{})
             if tag in bucket:errors.append('duplicate_rst_record');continue
             bucket[tag]=values
-        line=raw.decode('ascii','replace')
-        begin=BEGIN.search(line);end=END.search(line)
-        if (begin or end) and not raw.endswith(b'\n'):
+        if b'root timing begin' not in raw and b'root timing end' not in raw:continue
+        if not raw.endswith(b'\n'):
             errors.append('truncated_root_timing');continue
+        line=raw.rstrip(b'\r\n').decode('ascii','replace')
+        begin=BEGIN.fullmatch(line);end=END.fullmatch(line)
+        if not begin and not end:
+            errors.append('malformed_root_timing');continue
         if begin:
-            pid=int(begin.group(1));entry={'pid':pid,'comm':begin.group(2),'begin_ns':int(begin.group(3))}
+            pid=int(begin.group(1));entry={'pid':pid,'comm':begin.group(2),'begin_ns':int(begin.group(3)),
+                                         'files':int(begin.group(4)),'mappings':int(begin.group(5))}
             if pid in active:ambiguous.add(pid)
             else:active[pid]=entry
         if end:
@@ -64,9 +87,7 @@ def parse_log(data):
             if entry is None or pid in ambiguous or entry['comm']!=end.group(2):
                 ambiguous.add(pid);continue
             entry.update(elapsed_ns=int(end.group(3)),error=int(end.group(4)),kr=int(end.group(5)))
-            fields=re.findall(r'\b(read_calls|read_requested_bytes|read_ns|verify_calls|verify_bytes|verify_ns|read_total_ns|verify_total_ns)=(\d+)',line[end.end():])
-            if len({k for k,v in fields})!=len(fields):errors.append('duplicate_storage_timing_field')
-            entry['storage']={k:int(v) for k,v in fields}
+            entry['storage']={key:int(value) for key,value in zip(STORAGE_FIELDS,end.groups()[5:])}
             timing.append(entry)
     return records,errors,timing,sorted(active),sorted(ambiguous)
 
@@ -79,10 +100,11 @@ def evidence(condition, label):
 def capture(directory, variant, manifest, pid, report, condition, expected_sha):
     capture_bytes=(directory/'capture.json').read_bytes()
     if not re.fullmatch(r'[0-9a-f]{64}',str(expected_sha)) or sha(capture_bytes)!=expected_sha:raise ValueError('capture digest does not match plan')
-    metadata=json.loads(capture_bytes)
+    metadata=strict_json(capture_bytes)
+    if metadata.get('boots_truncated') is True or has_truncated_events(metadata):raise ValueError("capture boot or event list truncated; raw snapshot retained")
     flash_bytes=(directory/'flash-record.json').read_bytes()
     if sha(flash_bytes)!=metadata['flash_record_sha256']:raise ValueError('flash record digest mismatch')
-    flash=json.loads(flash_bytes)
+    flash=strict_json(flash_bytes)
     actual_success=flash.get('flash_success') is True and isinstance(flash.get('flash_success_evidence'),str) and bool(flash['flash_success_evidence'].strip())
     completed_offset=flash.get('flash_completed_uart_offset')
     if flash.get('uart_offset')!=metadata['flash_offset'] or flash.get('boot_sha256')!=metadata['flash_boot_sha256'] or actual_success!=metadata.get('flash_success_claimed') or flash.get('flash_success_evidence')!=metadata.get('flash_success_evidence') or completed_offset!=metadata.get('flash_completed_uart_offset'):raise ValueError('flash record inconsistent')
@@ -113,12 +135,15 @@ def capture(directory, variant, manifest, pid, report, condition, expected_sha):
     reasons=[]
     if metadata.get('flash_success_claimed') is not True or not isinstance(metadata.get('flash_success_evidence'),str) or not metadata['flash_success_evidence'].strip():reasons.append('flash_success_unverified')
     if metadata.get('checkpoint_verified') is True:
-        cp_bytes=(directory/'uart-checkpoint.json').read_bytes();cp=json.loads(cp_bytes);tail=(directory/'checkpoint-tail.raw').read_bytes()
+        cp_bytes=(directory/'uart-checkpoint.json').read_bytes();cp=strict_json(cp_bytes);tail=(directory/'checkpoint-tail.raw').read_bytes()
         if (sha(cp_bytes)!=metadata.get('checkpoint_sha256') or cp.get('uart_offset')!=metadata['flash_offset'] or
             type(cp.get('source_dev')) is not int or type(cp.get('source_inode')) is not int or cp.get('source_dev')!=metadata.get('source_dev') or cp.get('source_inode')!=metadata.get('source_inode') or
             cp.get('tail_bytes')!=len(tail) or cp.get('tail_start_offset',-1)+len(tail)!=metadata['flash_offset'] or
             cp.get('tail_sha256')!=sha(tail)):
             raise ValueError('UART checkpoint metadata inconsistent')
+        crosses=any(tail.endswith(ANCHOR[:n]) and snapshot.startswith(ANCHOR[n:]) for n in range(1,len(ANCHOR)))
+        if crosses!=metadata.get('offset_crosses_preloader_anchor'):raise ValueError('cross-boundary anchor metadata inconsistent')
+        if crosses:reasons.append('flash_offset_crosses_preloader_anchor')
     else:reasons.append('uart_checkpoint_unverified')
     prefix=metadata.get('pre_preloader')
     prefix_raw=snapshot[:offset]
@@ -132,7 +157,9 @@ def capture(directory, variant, manifest, pid, report, condition, expected_sha):
     if len({x['value'] for x in b.get('boot_reasons',[])})>1:reasons.append('first_boot_reason_conflict')
     if b.get('panics'):reasons.append('first_boot_panic')
     if b.get('el3_candidates'):reasons.append('first_boot_el3_candidate')
-    if errors:reasons.append('malformed_or_duplicate_rst')
+    if errors:reasons.append('malformed_or_duplicate_diagnostics')
+    if any(set(group)!=set(TAGS) for group in records.values()):reasons.append('incomplete_rst_group')
+    if open_pids or ambiguous:reasons.append('unfinished_or_ambiguous_root_timing')
     if len(matches)!=1:reasons.append('missing_or_ambiguous_pid_report'); selected=None
     else:
         key,selected=matches[0]
@@ -184,6 +211,28 @@ def capture(directory, variant, manifest, pid, report, condition, expected_sha):
             not isinstance(reset.get('evidence'),str) or not reset['evidence'].strip()):reasons.append('following_reset_unverified')
     elif next_boot is not None:
         raise ValueError('unexpected following boot')
+    later_boots=[]
+    pos=third if following>=0 else -1
+    index=2 if following>=0 else 1
+    while pos>=0:
+        next_pos=snapshot.find(ANCHOR,pos+len(ANCHOR))
+        segment=snapshot[pos:next_pos if next_pos>=0 else len(snapshot)]
+        if index>=len(boots):raise ValueError('missing later boot metadata')
+        boot=boots[index];absolute=metadata['flash_offset']+pos
+        if (boot.get('index')!=index+1 or boot.get('start_offset')!=absolute or
+            boot.get('end_offset')!=absolute+len(segment) or boot.get('sha256')!=sha(segment) or
+            boot.get('boot_reason_markers')!=len(events(segment,REASON_MARK)) or
+            boot.get('closed_by_next_preloader')!=(next_pos>=0) or
+            not event_offsets(boot.get('panics',[]),segment,PANIC,absolute) or
+            not event_offsets(boot.get('el3_candidates',[]),segment,EL3,absolute) or
+            not reason_values(boot.get('boot_reasons',[]),segment,absolute)):
+            raise ValueError('later boot metadata inconsistent')
+        later_boots.append({'index':index+1,'boot_reasons':boot.get('boot_reasons',[]),
+                            'boot_reason_markers':boot.get('boot_reason_markers'),
+                            'panics':boot.get('panics',[]),'el3_candidates':boot.get('el3_candidates',[]),
+                            'closed_by_next_preloader':next_pos>=0})
+        pos=next_pos;index+=1
+    if len(boots)!=index:raise ValueError('unexpected later boot metadata')
     return {'variant':variant,'boot_sha256':metadata['flash_boot_sha256'],'first_boot_sha256':b['sha256'],
             'capture_sha256':sha(capture_bytes),'flash_record_sha256':metadata['flash_record_sha256'],'snapshot_sha256':metadata['snapshot_sha256'],
             'pre_preloader':prefix,
@@ -191,7 +240,8 @@ def capture(directory, variant, manifest, pid, report, condition, expected_sha):
                           'boot_reasons':b.get('boot_reasons',[]),'panics':b.get('panics',[]),'el3_candidates':b.get('el3_candidates',[]),
                           'subsequent_boot_reason_candidate':b.get('subsequent_boot_reason_candidate')},
             'following_boot':None if next_boot is None else {'boot_reasons':next_boot.get('boot_reasons',[]),'panics':next_boot.get('panics',[]),'el3_candidates':next_boot.get('el3_candidates',[]),'closed_by_next_preloader':next_boot.get('closed_by_next_preloader',False)},
-            'report_key':list(key) if key else None,'records':selected,'rst_errors':errors,'root_timing':relevant,
+            'later_boots':later_boots,
+            'report_key':list(key) if key else None,'records':selected,'diagnostic_errors':errors,'root_timing':relevant,
             'root_timing_open_pids':open_pids,'root_timing_ambiguous_pids':ambiguous,'conditions':condition,'reasons':reasons,
             'limits':['RST snapshots are cumulative, non-transactional and may include in-flight work.',
                       'UART and timing attestations are external assertions, not proven by this parser.',
@@ -206,7 +256,7 @@ def analyze(plan, manifest, base):
     hashes=[manifest['variants'][v]['boot_sha256'] for v in ('baseline','batch')]
     if hashes[0]==hashes[1] or any(not isinstance(h,str) or not re.fullmatch(r'[0-9a-f]{64}',h) for h in hashes):raise ValueError('invalid pair boot hashes')
     if manifest['variants']['batch']['kernel_args'] != manifest['variants']['baseline']['kernel_args']+' native-cs-read-batch=1':raise ValueError('manifest profiles differ unexpectedly')
-    pairs=[];ratios=[];seen_boots=set();previous_order=None
+    pairs=[];ratios=[];seen_boots=set();previous_order=None;previous_eligible_order=None
     for index,pair in enumerate(plan['pairs']):
         pid=pair.get('pid',1);report=pair.get('report',1)
         if type(pid)!=int or pid<=0 or type(report)!=int or report not in (1,2):raise ValueError('invalid pid/report')
@@ -230,13 +280,16 @@ def analyze(plan, manifest, base):
             if not isinstance(ac,dict) or not isinstance(bc,dict) or ac.get('state')!=bc.get('state'):reasons.append('different_cache_state')
             ratio=b['prep']['pn']/a['prep']['pn'] if a['prep']['pn'] else None
         else:ratio=None
-        if not reasons and ratio is not None:ratios.append(ratio)
+        if not reasons and ratio is not None:
+            if previous_eligible_order==order:reasons.append('eligible_run_order_not_alternating')
+            else:ratios.append(ratio);previous_eligible_order=order
         pairs.append({'index':index+1,'pid':pid,'report':report,'order':order,'order_evidence':order_evidence,'runs':results,'conditional_eligible':not reasons,
                       'reasons':reasons,'prepare_time_ratio_batch_over_baseline':ratio})
     eligible=len(ratios)>=3
     return {'schema':1,'pairs':pairs,'eligible_pair_count':len(ratios),'minimum_pairs':3,
             'median_ratio':statistics.median(ratios) if ratios else None,'maximum_ratio':max(ratios) if ratios else None,
-            'meets_predeclared_threshold':None if not eligible else statistics.median(ratios)<=0.95 and max(ratios)<=1.10,
+            'meets_threshold':None if not eligible else statistics.median(ratios)<=0.95 and max(ratios)<=1.10,
+            'thresholds':{'median_ratio_max':0.95,'maximum_ratio_max':1.10},
             'conclusion':'conditional_exploratory_only',
             'limitations':['Fresh ADT random seeds differ; causal single-variable equivalence is not proven.',
                            'Metrics rely on attestations and bounded non-atomic RST snapshots; no actual media I/O or latency causality is established.',
@@ -246,9 +299,9 @@ def analyze(plan, manifest, base):
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--plan',type=Path,required=True);p.add_argument('--manifest',type=Path,required=True);a=p.parse_args()
     plan_bytes=a.plan.read_bytes();manifest_bytes=a.manifest.read_bytes()
-    plan=json.loads(plan_bytes);manifest=json.loads(manifest_bytes)
+    plan=strict_json(plan_bytes);manifest=strict_json(manifest_bytes)
     result=analyze(plan,manifest,a.plan.resolve().parent)
-    result['plan_sha256']=sha(plan_bytes);result['manifest_sha256']=sha(manifest_bytes)
+    result['plan_sha256']=sha(plan_bytes);result['manifest_sha256']=sha(manifest_bytes);result['analyzer_sha256']=sha(Path(__file__).read_bytes())
     print(json.dumps(result,indent=2))
 
 if __name__=='__main__':
