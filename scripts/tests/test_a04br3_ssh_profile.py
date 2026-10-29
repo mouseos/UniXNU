@@ -111,6 +111,14 @@ guard = '\n'.join(line[10:] for line in source[start:end].splitlines())
 for suffix, accepted in [('', True), ('-stream-2c1f944', True), ('../bad', False), ('-bad/name', False), ('-', False)]:
     result = subprocess.run(['/bin/bash', '-c', guard], env=dict(os.environ, A04BR3_ASSET_SUFFIX=suffix), capture_output=True)
     assert (result.returncode == 0) == accepted, (suffix, result.returncode)
+# UUID override is diagnostic-only and requires an explicitly intermediate asset.
+start = source.index('          if [ -n "${A04BR3_OWNER_DATA_UUID_OVERRIDE:-}" ]; then')
+end = source.index('          ./unixnu build kernel', start)
+guard = '\n'.join(line[10:] for line in source[start:end].splitlines())
+uuid = 'A6DD3DAA-6629-41C4-8E19-51473AA52AF8'
+for value, suffix, accepted in [('', '', True), (uuid, '-seed-intermediate', True), (uuid, '', False), ('bad', '-seed-intermediate', False)]:
+    result = subprocess.run(['/bin/bash', '-c', guard], env=dict(os.environ, A04BR3_OWNER_DATA_UUID_OVERRIDE=value, A04BR3_ASSET_SUFFIX=suffix), capture_output=True)
+    assert (result.returncode == 0) == accepted, (value, suffix, result.returncode)
 # Parse every embedded shell body with bash without executing it.
 for run in re.findall(r'^        run: \|\n((?:          .*\n|\n)+)', source, re.M):
     script = '\n'.join(line[10:] for line in run.splitlines())
