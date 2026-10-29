@@ -51,7 +51,7 @@ typedef struct {uint32_t version,scatterOffset,codeLimit,nCodeSlots;uint64_t cod
 struct cs_blob {const CS_CodeDirectory*csb_cd;const struct cs_hash*csb_hashtype;unsigned csb_hash_pageshift,csb_hash_firstlevel_pageshift;off_t csb_base_offset;const void*csb_mem_kaddr;size_t csb_mem_size;const uint8_t*csb_native4k_hashes;size_t csb_native4k_hashes_size,csb_native4k_hash_count;};
 struct vnode{int readonly;};typedef struct vnode*vnode_t;
 struct proc{int pid;uint64_t uid;};typedef struct proc*proc_t;
-static unsigned batch_flag,root_flag=1;static int batch_present,root_present=1;
+static unsigned batch_flag,root_flag=1,overlap_flag;static int batch_present,root_present=1;
 static unsigned clocks,identity_reads,timing_records;static uint64_t ticks,reported[5];static int reported_batched;
 static uint8_t *input,*snapshot,*expected_hashes;static size_t input_size,read_size,scratch_size;
 static size_t reads,read_bytes,max_read,original_hashes,derived_hashes;
@@ -64,13 +64,17 @@ static void sha_init(union cs_hash_union*c){SHA256_Init(&c->sha);}
 static void sha_update(union cs_hash_union*c,const void*b,size_t n){SHA256_Update(&c->sha,b,n);}
 static void sha_final(void*out,union cs_hash_union*c){SHA256_Final(out,&c->sha);}
 static struct cs_hash md={32,32,sha_init,sha_update,sha_final};
-static int PE_parse_boot_argn(const char*n,void*out,size_t z){assert(z==sizeof(unsigned));if(!strcmp(n,"native-cs-read-batch")){*(unsigned*)out=batch_flag;return batch_present;}assert(!strcmp(n,"native-root-timing"));*(unsigned*)out=root_flag;return root_present;}
+static int PE_parse_boot_argn(const char*n,void*out,size_t z){assert(z==sizeof(unsigned));if(!strcmp(n,"native-cs-read-batch")){*(unsigned*)out=batch_flag;return batch_present;}if(!strcmp(n,"native-io-trace")){*(unsigned*)out=overlap_flag;return 1;}assert(!strcmp(n,"native-root-timing"));*(unsigned*)out=root_flag;return root_present;}
 static proc_t current_proc(void){static struct proc p={2,102};return &p;}
 static int proc_getpid(proc_t p){identity_reads++;return p->pid;}
 static uint64_t proc_uniqueid(proc_t p){identity_reads++;return p->uid;}
 static uint64_t native_blob_now(void){clocks++;return ticks+=10;}
 static void native_root_hash_timing_record(int pid,uint64_t uid,const uint64_t m[5],int batched){assert(pid==2&&uid==102);memcpy(reported,m,sizeof(reported));reported_batched=batched;timing_records++;}
 static int vnode_vfsisrdonly(vnode_t v){return v->readonly;}
+static unsigned vnode_vid(vnode_t v){(void)v;return 9;}
+static int proc_selfpid(void){return 2;}
+static void *current_thread(void){return NULL;}
+static uint64_t thread_tid(void *t){(void)t;return 102;}
 static int round_page_overflow(size_t n,size_t*out){if(fail_round)return 1;return __builtin_add_overflow(n,(size_t)4095,out)?1:(*out&=~(size_t)4095,0);}
 static int kmem_alloc(int map,uintptr_t*out,size_t n,int flags,int tag){(void)map;(void)flags;(void)tag;if(fail_storage)return 1;assert(!storage_live);*out=(uintptr_t)calloc(1,n);assert(*out);storage_pointer=(void*)*out;storage_live=1;return 0;}
 static void kmem_free(int map,uintptr_t addr,size_t n){(void)map;(void)n;assert(storage_live&&(void*)addr==storage_pointer);free((void*)addr);storage_pointer=NULL;storage_live=0;}
@@ -174,6 +178,14 @@ for(int fault=0;fault<7;fault++){
 for(root_present=0;root_present<2;root_present++)for(root_flag=0;root_flag<4;root_flag++){
  reset();setup(32769,&cd,&blob);assert(!cs_native4k_prepare(&v,&blob));check_telemetry(1);dispose(&blob);
 }
+#if XNU_ROOT_TIMING && XNU_IO_OVERLAP_TRACE
+reset();overlap_flag=1;batch_flag=0;batch_present=1;struct CS_CodeDirectory_unused {int unused;};
+CS_CodeDirectory trace_cd;struct cs_blob trace_blob;struct vnode trace_v={1};setup(32769,&trace_cd,&trace_blob);
+assert(!cs_native4k_prepare(&trace_v,&trace_blob));assert(native_cs_trace.n==2);
+assert(native_cs_trace.events[0].end==0 && native_cs_trace.events[1].end!=0);
+assert(native_cs_trace.events[1].bytes==32769 && native_cs_trace.events[1].reads==3 && native_cs_trace.events[1].error==0);
+dispose(&trace_blob);overlap_flag=0;
+#endif
 puts("PASS actual preparer + real SHA256: strict/default/readonly gates, 4K/16K/256K boundaries, partial tails, digest strides, same-buffer derivation, every corrupt block, read/resid/nullhash/alloc/protect/overflow failures without publication, compatibility and gated read/original/derived timing");}
 '''
 with tempfile.TemporaryDirectory(prefix='native4k-batch-') as directory:
@@ -182,9 +194,22 @@ with tempfile.TemporaryDirectory(prefix='native4k-batch-') as directory:
   subprocess.run(['git','apply','--include='+f,str(patch)],cwd=t,check=True)
  s=out.read_text();a=s.index('/* Optional profiling of the eager');b=s.index('static int\ncs_native4k_prepare(',a);end=s.index('\n}\n',b)+2
  body=s[a:end].replace('#include <pexpert/pexpert.h>','')
+ trace_begin=body.index('/* Optional bounded correlation trace.')
+ trace_end=body.index('\n__attribute__((noinline))\nstatic int\ncs_native4k_prepare',trace_begin)
+ trace=body[trace_begin:trace_end]
+ assert 'printf(' not in trace[:trace.index('void native_cs_trace_report(void);')]
+ trace_stub=trace[trace.index('#else\nstruct native_cs_trace_event'):trace.rindex('#endif')+len('#endif')]
+ body=body[:trace_begin]+trace_stub.replace('#else\n','',1).rsplit('#endif',1)[0]+body[trace_end:]
  assert 'printf(' not in body, 'preparer must not emit UART on the read/hash path'
  libs=subprocess.check_output(['pkg-config','--cflags','--libs','openssl'],text=True).split()
  for timing in (0,1):
   (t/'test.c').write_text(pre+body+main)
   subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-unused-variable','-Wno-misleading-indentation','-Wno-deprecated-declarations','-fsanitize=address,undefined','-fno-pie','-no-pie','-DXNU_ROOT_TIMING='+str(timing),str(t/'test.c'),'-o',str(t/'test'),*libs],check=True)
   subprocess.run([str(t/'test')],check=True,timeout=30)
+
+ # Exercise the real prepare loop with the tracing implementation enabled.
+ real=s[a:end].replace('#include <pexpert/pexpert.h>','')
+ (t/'test.c').write_text(pre+real+main)
+ subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-unused-variable','-Wno-misleading-indentation','-Wno-deprecated-declarations','-fsanitize=address,undefined','-fno-pie','-no-pie','-DXNU_ROOT_TIMING=1','-DXNU_IO_OVERLAP_TRACE=1',str(t/'test.c'),'-o',str(t/'test'),*libs],check=True)
+ subprocess.run([str(t/'test')],check=True,timeout=30)
+ print('PASS actual traced prepare loop with real SHA-256 and entry/exit range')

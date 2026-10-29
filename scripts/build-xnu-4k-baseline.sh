@@ -876,6 +876,23 @@ if not stamp.exists() or stamp.read_text() != mode:
     out.mkdir(parents=True, exist_ok=True)
     stamp.write_text(mode)
 PYIRQ
+IO_OVERLAP_TRACE=${XNU_IO_OVERLAP_TRACE:-0}
+if [[ "$IO_OVERLAP_TRACE" != 0 && "$IO_OVERLAP_TRACE" != 1 ]] || [[ "$IO_OVERLAP_TRACE" == 1 && "$ROOT_TIMING" != 1 ]]; then
+  echo 'XNU_IO_OVERLAP_TRACE requires 0 or 1 and XNU_ROOT_TIMING=1 when enabled' >&2
+  exit 1
+fi
+python3 - "$IO_OVERLAP_TRACE" <<'PYTRACE'
+from pathlib import Path
+import sys
+out = Path('build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837')
+stamp = out / '.io-overlap-mode'
+if not stamp.exists() or stamp.read_text() != sys.argv[1]:
+    for relative in ('bsd/DEVELOPMENT/ubc_subr.o', 'mach.development.bcm2837.unstripped.noctf'):
+        (out / relative).unlink(missing_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(sys.argv[1])
+PYTRACE
+EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_IO_OVERLAP_TRACE=$IO_OVERLAP_TRACE"
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_ROOT_TIMING=$ROOT_TIMING"
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOOT_PROGRESS=$BOOT_PROGRESS"
 PROCESS_EXIT_DIAG=${XNU_PROCESS_EXIT_DIAG:-0}
