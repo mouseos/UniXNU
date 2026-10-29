@@ -25,7 +25,14 @@ with tempfile.TemporaryDirectory(prefix='a04br3-profile-') as tmp:
     tools = root / 'tools'
     tools.mkdir()
     git = tools / 'git'
-    git.write_text('#!/bin/sh\n[ "$*" = "-C device rev-parse HEAD" ] || exit 91\nprintf "%s\\n" ' + pin + '\n')
+    git.write_text('''#!/bin/sh
+case "$*" in
+  '-C device rev-parse HEAD') printf '%s\\n' "$DEVICE_HEAD" ;;
+  'rev-parse HEAD:drivers/ArmCpu') printf '%s\\n' "$ARMCPU_HEAD" ;;
+  '-C device cat-file -e '* | '-C device merge-base --is-ancestor '*) [ "$AUTO_PROFILE" = 1 ] ;;
+  *) exit 91 ;;
+esac
+''')
     git.chmod(0o755)
     for probe, metal, roa, mode in itertools.product((False, True), (False, True), (False, True), ('selftest', 'publish')):
         generated = root / 'a04br3.env'
@@ -36,7 +43,8 @@ with tempfile.TemporaryDirectory(prefix='a04br3-profile-') as tmp:
         env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ['PATH'],
                    RUNNER_TEMP=str(root), GITHUB_WORKSPACE=str(root), GITHUB_REPOSITORY='fixture/repository',
                    UNIQUE_CHIP_ID='fixture', GH_TOKEN='fixture', A04BR3_POWERVR_METAL_MODE=mode,
-                   A04BR3_POWERVR_METAL_ROA_COLOR=str(int(roa)))
+                   A04BR3_POWERVR_METAL_ROA_COLOR=str(int(roa)), IOSTAT_STACK_PROFILE='0',
+                   DEVICE_HEAD=pin, ARMCPU_HEAD='85d06a5248a4516c777763d195866a2362e5d7b0', AUTO_PROFILE='0')
         result = subprocess.run(['/bin/bash', '-c', rendered], env=env, capture_output=True, text=True)
         if roa and not (probe and metal):
             assert result.returncode != 0 and not generated.exists()
@@ -47,6 +55,46 @@ with tempfile.TemporaryDirectory(prefix='a04br3-profile-') as tmp:
         fields = subprocess.check_output(['/bin/bash', '-c', inspect], env=env).decode().split('\0')
         assert fields[:3] == [pin, mode, str(int(roa))]
         assert fields[3] == ('--kernel-arg sheng-fb-gpu=1' if mode == 'publish' else '')
+    substitutions = {'inputs.powervr_probe':'true', 'inputs.powervr_metal':'true', 'inputs.skip_setup':'false', 'github.run_id':'123'}
+    rendered = re.sub(r'\$\{\{\s*(.*?)\s*\}\}', lambda match: substitutions[match[1]], body)
+    flags = ['XNU_IRQ_PC_STATS','XNU_MSDC_IRQ_WAIT','XNU_MSDC_IRQ_WORKER','XNU_MSDC_GIC_NS',
+             'XNU_PROCESS_EXIT_DIAG','XNU_ROOT_TIMING','XNU_IO_OVERLAP_TRACE','XNU_NATIVE_CS_HASH_CACHE']
+    for explicit, auto, armcpu, expected in [('0','0','85d06a5248a4516c777763d195866a2362e5d7b0','off'),
+                                             ('1','0','85d06a5248a4516c777763d195866a2362e5d7b0','on'),
+                                             ('0','1','85d06a5248a4516c777763d195866a2362e5d7b0','on'),
+                                             ('0','1','1951cc8444b340d7d8879e9418220cf29eb711d7','reject')]:
+        env = dict(os.environ, PATH=str(tools)+os.pathsep+os.environ['PATH'], RUNNER_TEMP=str(root),
+                   GITHUB_WORKSPACE=str(root), GITHUB_REPOSITORY='fixture/repository', UNIQUE_CHIP_ID='fixture', GH_TOKEN='fixture',
+                   A04BR3_POWERVR_METAL_MODE='publish', A04BR3_POWERVR_METAL_ROA_COLOR='1',
+                   IOSTAT_STACK_PROFILE=explicit, AUTO_PROFILE=auto, DEVICE_HEAD=pin, ARMCPU_HEAD=armcpu)
+        generated = root/'a04br3.env'; generated.unlink(missing_ok=True)
+        result = subprocess.run(['/bin/bash','-c',rendered],env=env,capture_output=True,text=True)
+        if expected == 'reject':
+            assert result.returncode != 0 and 'requires ArmCpu' in result.stderr
+            continue
+        assert result.returncode == 0, result.stderr
+        inspect = 'source "$RUNNER_TEMP/a04br3.env"; printf "%s\\0" ' + ' '.join('"${'+name+'-unset}"' for name in flags)
+        values = subprocess.check_output(['/bin/bash','-c',inspect],env=env).decode().split('\0')[:-1]
+        assert values == (['1']*len(flags) if expected == 'on' else ['unset']*len(flags)), values
+    # Execute the real post-checkout rebuild gate: it must auto-enable when the
+    # requested device changes to the diagnostic revision, and reject an
+    # incompatible ArmCpu before the rebuild starts.
+    rebuild = source.split("<<'SCRIPT'", 1)[1].split('\n          SCRIPT', 1)[0]
+    gate = rebuild.split('          diagnostic_device=', 1)[1].split('          ./unixnu tree', 1)[0]
+    gate = 'diagnostic_device=' + '\n'.join(line[10:] if line.startswith('          ') else line for line in gate.splitlines())
+    for explicit, auto, armcpu, expected in [('0','0','85d06a5248a4516c777763d195866a2362e5d7b0','off'),
+                                             ('0','1','85d06a5248a4516c777763d195866a2362e5d7b0','on'),
+                                             ('0','1','1951cc8444b340d7d8879e9418220cf29eb711d7','reject')]:
+        env = dict(os.environ, PATH=str(tools)+os.pathsep+os.environ['PATH'], IOSTAT_STACK_PROFILE=explicit,
+                   AUTO_PROFILE=auto, DEVICE_HEAD=pin, ARMCPU_HEAD=armcpu)
+        for name in flags: env.pop(name, None)
+        inspect = 'printf "%s\\0" ' + ' '.join('"${'+name+'-unset}"' for name in flags)
+        result=subprocess.run(['/bin/bash','-c','set -e\n'+gate+'\n'+inspect],env=env,capture_output=True)
+        if expected == 'reject': assert result.returncode != 0 and b'requires the pinned ArmCpu' in result.stderr
+        else:
+            assert result.returncode == 0, result.stderr
+            values=result.stdout.decode().split('\0')[:-1]
+            assert values == (['1']*len(flags) if expected == 'on' else ['unset']*len(flags)), values
 # Parse every embedded shell body with bash without executing it.
 for run in re.findall(r'^        run: \|\n((?:          .*\n|\n)+)', source, re.M):
     script = '\n'.join(line[10:] for line in run.splitlines())

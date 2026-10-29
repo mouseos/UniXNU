@@ -36,7 +36,7 @@ on:
         type: boolean
         default: false
       iostat_stack_profile:
-        description: "Diagnostic-only iostat stack profile; requires the pinned ArmCpu source"
+        description: "Diagnostic-only iostat stack profile; auto-enabled for the stack-iostat device revision"
         type: boolean
         default: false
       keep_minutes:
@@ -189,6 +189,13 @@ jobs:
           IOSTAT_STACK_PROFILE: ${{ inputs.iostat_stack_profile && '1' || '0' }}
         run: |
           set -euo pipefail
+          # This device revision needs the diagnostic link symbols. Enable the
+          # exact profile automatically for it and its descendants; unrelated
+          # device revisions retain the default-off behavior.
+          diagnostic_device=78d2c29a2a8122df2b0ae4809619c96ade662f5a
+          if [ "$IOSTAT_STACK_PROFILE" = 0 ] && git -C device cat-file -e "$diagnostic_device^{commit}" 2>/dev/null && git -C device merge-base --is-ancestor "$diagnostic_device" HEAD; then
+            IOSTAT_STACK_PROFILE=1
+          fi
           if [ "$A04BR3_POWERVR_METAL_ROA_COLOR" = 1 ] && { [ "${{ inputs.powervr_probe }}" != true ] || [ "${{ inputs.powervr_metal }}" != true ]; }; then
             echo 'powervr_metal_roa_color requires powervr_probe=true and powervr_metal=true' >&2
             exit 1
@@ -242,6 +249,16 @@ jobs:
           [ -f "$RUNNER_TEMP/a04br3-data.env" ] && source "$RUNNER_TEMP/a04br3-data.env"
           git -C device fetch -q origin
           git -C device checkout -q --detach "${1:-$A04BR3_DEVICE_REF}"
+          diagnostic_device=78d2c29a2a8122df2b0ae4809619c96ade662f5a
+          if [ "$IOSTAT_STACK_PROFILE" = 0 ] && git -C device cat-file -e "$diagnostic_device^{commit}" 2>/dev/null && git -C device merge-base --is-ancestor "$diagnostic_device" HEAD; then
+            IOSTAT_STACK_PROFILE=1
+            export IOSTAT_STACK_PROFILE
+            export XNU_IRQ_PC_STATS=1 XNU_MSDC_IRQ_WAIT=1 XNU_MSDC_IRQ_WORKER=1 XNU_MSDC_GIC_NS=1 XNU_PROCESS_EXIT_DIAG=1 XNU_ROOT_TIMING=1 XNU_IO_OVERLAP_TRACE=1 XNU_NATIVE_CS_HASH_CACHE=1
+          fi
+          if [ "$IOSTAT_STACK_PROFILE" = 1 ] && [ "$(git rev-parse HEAD:drivers/ArmCpu)" != 85d06a5248a4516c777763d195866a2362e5d7b0 ]; then
+            echo 'iostat_stack_profile requires the pinned ArmCpu gitlink' >&2
+            exit 1
+          fi
           ./unixnu tree -D "$GITHUB_WORKSPACE/device"
           # User-space probes and their owner trust cache are inputs too. Reuse the
           # existing dependency builds, but stage the newly checked-out sources.
@@ -282,6 +299,10 @@ jobs:
           cp out/a04br3/payload/payload.img "$RUNNER_TEMP/payload-$tag.img"
           gh release upload "a04br3-ssh-${{ github.run_id }}" "$RUNNER_TEMP/payload-$tag.img" --clobber
           echo "PUBLISHED payload-$tag.img"
+
+      - name: Surface first build failure before SSH retention
+        if: ${{ !cancelled() && steps.first.outcome == 'failure' }}
+        run: echo '::warning::First build failed; the SSH runner is retained for diagnosis. No payload is implied.'
 
       # First build is synchronous. Do not snapshot an orphaned compiler or an
       # SSH rebuild; partial output after a failed, completed build is reusable.
