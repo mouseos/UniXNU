@@ -268,6 +268,18 @@ jobs:
           export DEVICE_DIR="$GITHUB_WORKSPACE/device"
           A04BR3_REUSE_DATA_SEED=1 bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"
           source "$RUNNER_TEMP/a04br3-data.env"
+          # Diagnostic-only reuse of a separately verified packed Data seed.
+          # A payload assembler must pair the kernel with that exact seed.
+          if [ -n "${A04BR3_OWNER_DATA_UUID_OVERRIDE:-}" ]; then
+            if [[ ! "$A04BR3_OWNER_DATA_UUID_OVERRIDE" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]; then
+              echo 'invalid A04BR3_OWNER_DATA_UUID_OVERRIDE' >&2; exit 1
+            fi
+            if [[ "${A04BR3_ASSET_SUFFIX:-}" != *-intermediate ]]; then
+              echo 'Data UUID override requires an -intermediate asset suffix' >&2; exit 1
+            fi
+            export XNU_OWNER_DATA_VOLUME_UUID="$A04BR3_OWNER_DATA_UUID_OVERRIDE"
+            echo "owner Data UUID override: $XNU_OWNER_DATA_VOLUME_UUID (intermediate payload is not deployable until paired)"
+          fi
           ./unixnu build kernel
           ./unixnu build payload $TRUST_CACHE_ARG "$RUNNER_TEMP/trustcache" --data-ramdisk "$RUNNER_TEMP/data.dbr" --unique-chip-id "$UNIQUE_CHIP_ID" $SKIP_SETUP_ARG ${METAL_KERNEL_ARGS[@]+"${METAL_KERNEL_ARGS[@]}"}
           tag="$(git -C device rev-parse --short HEAD)"
