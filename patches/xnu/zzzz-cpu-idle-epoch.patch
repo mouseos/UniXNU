@@ -1,0 +1,59 @@
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -361,6 +361,36 @@
+ 	return ipending;
+ }
+ 
++#if defined(XNU_ARMCPU_IDLE_EPOCH) && XNU_ARMCPU_IDLE_EPOCH
++/* Per-CPU idle epoch; odd means inside machine_idle, UINT64_MAX poisoned.
++ * Weak CAS failure poisons rather than retrying. A mismatched transition permanently poisons
++ * this CPU for this boot. It does not establish PMU ownership or access. */
++static uint64_t unixnu_idle_epoch[MAX_CPUS];
++/* Call only with preemption disabled on expectedCpu. */
++uint64_t unixnu_idle_epoch_current(unsigned expectedCpu);
++
++uint64_t
++unixnu_idle_epoch_current(unsigned expectedCpu)
++{
++    int cpu = getCpuDatap()->cpu_number;
++    if (cpu < 0 || (unsigned)cpu >= MAX_CPUS || (unsigned)cpu != expectedCpu) return UINT64_MAX;
++    return __atomic_load_n(&unixnu_idle_epoch[cpu], __ATOMIC_ACQUIRE);
++}
++
++static void
++unixnu_idle_epoch_transition(bool entry)
++{
++    int cpu = getCpuDatap()->cpu_number;
++    if (cpu < 0 || (unsigned)cpu >= MAX_CPUS) return;
++    uint64_t *epoch = &unixnu_idle_epoch[cpu];
++    uint64_t old = __atomic_load_n(epoch, __ATOMIC_RELAXED);
++    if (old == UINT64_MAX || ((old & 1) != (entry ? 0 : 1)) || old >= UINT64_MAX - 1 ||
++        !__atomic_compare_exchange_n(epoch, &old, old + 1, true, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
++        __atomic_store_n(epoch, UINT64_MAX, __ATOMIC_RELEASE);
++    }
++}
++#endif
++
+ void
+ machine_idle(void)
+ {
+@@ -368,6 +398,9 @@
+ 	 * Idle_load_context()
+ 	 */
+ 	assert((__builtin_arm_rsr("DAIF") & (DAIF_IRQF | DAIF_FIQF)) == (DAIF_IRQF | DAIF_FIQF));
++#if defined(XNU_ARMCPU_IDLE_EPOCH) && XNU_ARMCPU_IDLE_EPOCH
++	unixnu_idle_epoch_transition(true);
++#endif
+ 	/* Check for, and act on, a WFE recommendation.
+ 	 * Bypasses context spill/fill for a minor perf. increment.
+ 	 * May unmask and restore IRQ+FIQ mask.
+@@ -379,6 +412,9 @@
+ 		 */
+ 		Idle_context();
+ 	}
++#if defined(XNU_ARMCPU_IDLE_EPOCH) && XNU_ARMCPU_IDLE_EPOCH
++	unixnu_idle_epoch_transition(false);
++#endif
+ 	__builtin_arm_wsr("DAIFClr", (DAIFSC_IRQF | DAIFSC_FIQF));
+ }
+ 
