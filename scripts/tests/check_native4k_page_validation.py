@@ -96,7 +96,7 @@ with tempfile.TemporaryDirectory() as d:
  later_helper_changes=[]
  def helper_text(text):
   marker='static int\ncs_native4k_prepare('
-  if marker not in text:return None
+  assert text.count(marker)==1, 'prepare helper missing or ambiguous'
   start=text.index(marker);end=text.index('\n}\n',start)+2
   return text[start:end]
  for patch in [*sorted((R/'patches/xnu').glob('*.patch')),*sorted((R/'kits/NativePrelink/patches').glob('*.patch'))]:
