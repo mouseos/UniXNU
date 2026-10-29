@@ -33,6 +33,7 @@ int main(void) {
  unixnu_idle_epoch_transition(false);assert(unixnu_idle_epoch_current(current->cpu_number)==UINT64_MAX);unixnu_idle_epoch_transition(true);assert(unixnu_idle_epoch_current(current->cpu_number)==UINT64_MAX);
  current=&cpus[2];unixnu_idle_epoch_transition(true);unixnu_idle_epoch_transition(true);assert(unixnu_idle_epoch_current(current->cpu_number)==UINT64_MAX);
  unixnu_idle_epoch[2]=0;force_cas_failure=true;unixnu_idle_epoch_transition(true);assert(unixnu_idle_epoch_current(2)==UINT64_MAX);force_cas_failure=false;unixnu_idle_epoch_transition(false);assert(unixnu_idle_epoch_current(2)==UINT64_MAX);
+ unixnu_idle_epoch[2]=0;unixnu_idle_epoch_transition(true);force_cas_failure=true;unixnu_idle_epoch_transition(false);assert(unixnu_idle_epoch_current(2)==UINT64_MAX);force_cas_failure=false;
  current=&cpus[3];unixnu_idle_epoch[3]=UINT64_MAX-3;unixnu_idle_epoch_transition(true);unixnu_idle_epoch_transition(false);assert(unixnu_idle_epoch_current(3)==UINT64_MAX-1);unixnu_idle_epoch_transition(true);assert(unixnu_idle_epoch_current(current->cpu_number)==UINT64_MAX);
  current=&bad;assert(unixnu_idle_epoch_current(4)==UINT64_MAX);unixnu_idle_epoch_transition(true);
  current=&negative;assert(unixnu_idle_epoch_current(0)==UINT64_MAX);unixnu_idle_epoch_transition(true);
@@ -46,5 +47,7 @@ with tempfile.TemporaryDirectory(prefix='idle-epoch-test-') as tmp:
  # The feature's code and externally visible function are absent when disabled.
  off=p/'off.c';off.write_text('#include <stdint.h>\n#include <stdbool.h>\n'+implementation+'\nint main(void){return 0;}\n')
  subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-DXNU_ARMCPU_IDLE_EPOCH=0',str(off),'-o',str(exe)],check=True)
+ subprocess.run([str(exe)],check=True)
+ subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror',str(off),'-o',str(exe)],check=True)
  subprocess.run([str(exe)],check=True)
 print('PASS actual idle epoch code: CPU isolation, paired transitions, poison and default off')
