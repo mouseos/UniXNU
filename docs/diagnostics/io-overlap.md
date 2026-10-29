@@ -59,14 +59,19 @@ Only complete framed reports are consumed; multiple boots with repeated report
 sequence numbers are refused. `file_range_overlaps` compares offered contiguous
 file ranges for completed preparations sharing one boot-local ID; it states
 whether their execution intervals overlap and includes errors. `block_range_overlaps`
-compares sampled offers from different execution threads in the same window.
+compares sampled offers from different execution threads in the same window,
+regardless of time, and gives their time separation; this alone does not show
+concurrent requests.
 `temporal_thread_candidates` counts sampled same-PID/TID offers inside a prepare
 interval without a timing margin. It does not prove a mapping from file offsets
 to block offsets or causation. Missing matches mean unknown, not no I/O.
-Inspect `coverage`, every loss counter, invalid CS event and incomplete frame
+Inspect `coverage`, loss counters (including the separately reported loss
+fields observed in incomplete headers), invalid CS events and incomplete frames
 before drawing conclusions. A missing overlap is never proof of absence, even
 when the reported loss counters are zero: capture is sampled and the reporter
-discards the final partial interval when stopped.
+discards the final partial interval when stopped. Its stop marker is surfaced
+as `stopped_with_unreported_final_interval`; the discarded losses cannot be
+counted, and an interrupted log may also omit that marker.
 
 Host checks use the pinned XNU checkout:
 

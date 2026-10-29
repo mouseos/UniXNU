@@ -7,14 +7,21 @@ def fields(line):
     return {k:int(v) for k,v in re.findall(r'\b([a-z_]+)=(\d+)',line)}
 
 def parse(text):
-    streams={'CS':{},'NativeMsdc':{}}; active={}; incomplete=0
+    streams={'CS':{},'NativeMsdc':{}}; active={}; incomplete=0; stopped=0
+    seen={'CS':0,'NativeMsdc':0}
+    observed={'CS':{'full':0,'busy':0,'keys_full':0},'NativeMsdc':{'full':0,'contention':0}}
     for line in text.splitlines():
+        if 'NativeMsdc overlap stopped final_interval_unreported=1' in line:
+            stopped+=1
+            continue
         m=re.search(r'(CS|NativeMsdc) overlap (begin|event|end)\b',line)
         if not m: continue
         name,kind=m.groups(); f=fields(line)
         if 'seq' not in f: incomplete+=1; continue
         seq=f['seq']
         if kind=='begin':
+            seen[name]+=1
+            for k in observed[name]: observed[name][k]+=f.get(k,0)
             if name in active: incomplete+=1
             if seq in streams[name]: raise ValueError('repeated sequence: separate boots before analysis')
             active[name]={'header':f,'events':[],'seq':seq}
@@ -29,10 +36,10 @@ def parse(text):
             if len(group['events']) != expected or (name=='CS' and f.get('count')!=expected) or bad: incomplete+=1
             else: streams[name][seq]=group
     incomplete+=len(active)
-    return streams,incomplete
+    return streams,incomplete,stopped,seen,observed
 
 def analyze(text):
-    streams,incomplete=parse(text); cs=[]; io=[]; loss={}
+    streams,incomplete,stopped,seen,observed=parse(text); cs=[]; io=[]; loss={}
     for name,groups in streams.items():
         keys=('full','busy','keys_full') if name=='CS' else ('full','contention')
         loss[name]={k:sum(g['header'].get(k,0) for g in groups.values()) for k in keys}
@@ -68,12 +75,12 @@ def analyze(text):
             if not all(k in b for k in ('pid','tid','window','block','count','ns')): continue
             if a['window']!=b['window'] or (a['pid'],a['tid'])==(b['pid'],b['tid']):continue
             lo=max(a['block'],b['block']);hi=min(a['block']+a['count'],b['block']+b['count'])
-            if lo<hi:block.append({'window':a['window'],'block':lo,'sectors':hi-lo,'a':[a['pid'],a['tid'],a['ns']],'b':[b['pid'],b['tid'],b['ns']]})
+            if lo<hi:block.append({'window':a['window'],'block':lo,'sectors':hi-lo,'delta_ns':abs(a['ns']-b['ns']),'a':[a['pid'],a['tid'],a['ns']],'b':[b['pid'],b['tid'],b['ns']]})
     candidates=[]
     for e in completed:
         matches=[v for v in io if all(k in v for k in ('pid','tid','ns','block','count','window')) and v['pid']==e['pid'] and v['tid']==e['tid'] and e['start']<=v['ns']<=e['end']]
         candidates.append({'id':e['id'],'op':e['op'],'same_thread_offers':len(matches),'offer_bytes':sum(v['count']*512 for v in matches),'start_observed':e['start_observed']})
-    return {'reports':{name:len(groups) for name,groups in streams.items()},'missing_streams':[name for name,groups in streams.items() if not groups], 'loss':loss,'coverage':'sampled_incomplete_if_loss_or_interrupted','invalid_cs_events':invalid_cs,'incomplete_reports':incomplete,'cs_start_without_end':len(starts.keys()-ends.keys()),'cs_end_without_start':len(ends.keys()-starts.keys()),'cs_completed':len(completed),'block_offers':len(io),'block_offer_stage':'prequeue_offer_later_rejection_possible','file_range_overlaps':preparation,'block_range_overlaps':block,'temporal_thread_candidates':candidates,'limitations':'Block records are prequeue offers and may later be rejected; all records are bounded samples, loss counters may shift between adjacent intervals and the final partial interval is discarded on stop; absence of overlap is not evidence of absence; offers are not physical I/O; file offsets and block offsets are not a mapping; cache/asynchronous I/O and drops prevent causal attribution.'}
+    return {'reports':{name:len(groups) for name,groups in streams.items()},'missing_streams':[name for name,groups in streams.items() if not groups], 'streams_not_seen':[name for name,n in seen.items() if not n], 'observed_loss_headers':observed, 'reported_loss_present':any(v for group in observed.values() for v in group.values()), 'full_capture_proven':False, 'loss':loss,'coverage':'sampled_incomplete_if_loss_or_interrupted','stopped_with_unreported_final_interval':stopped,'invalid_cs_events':invalid_cs,'incomplete_reports':incomplete,'cs_start_without_end':len(starts.keys()-ends.keys()),'cs_end_without_start':len(ends.keys()-starts.keys()),'cs_completed':len(completed),'block_offers':len(io),'block_offer_stage':'prequeue_offer_later_rejection_possible','file_range_overlaps':preparation,'block_range_overlaps':block,'temporal_thread_candidates':candidates,'limitations':'Block records are prequeue offers and may later be rejected; all records are bounded samples, loss counters may shift between adjacent intervals and the final partial interval is discarded on stop; absence of overlap is not evidence of absence; block overlaps compare offers at any time in the same boot; observed loss headers may belong to incomplete reports and are not guaranteed complete; offers are not physical I/O; file offsets and block offsets are not a mapping; cache/asynchronous I/O and drops prevent causal attribution.'}
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('log',type=Path);a=p.parse_args();print(json.dumps(analyze(a.log.read_text(errors='replace')),indent=2))
