@@ -953,7 +953,24 @@ if not stamp.exists() or stamp.read_text() != mode:
     out.mkdir(parents=True, exist_ok=True)
     stamp.write_text(mode)
 PYIDLE
-env "XNU_PMUV3_ACTIVE=$PMUV3_ACTIVE" "XNU_ARMCPU_IDLE_EPOCH=$IDLE_EPOCH" "XNU_IRQ_PC_STATS=$IRQ_PC_STATS" "XNU_IRQ_CORRELATION_STATS=$IRQ_CORRELATION_STATS" "XNU_IPI_SIGNAL_STATS=$IPI_SIGNAL_STATS" make -C .cache/xnu-work "${XNU_BUILD_TARGET:-build}" SDKROOT="${XNU_SDKROOT:-iphoneos}" ARCH_CONFIGS=ARM64 \
+SWITCH_OBSERVER=${XNU_ARMCPU_SWITCH_OBSERVER:-0}
+if [[ "$SWITCH_OBSERVER" != 0 && "$SWITCH_OBSERVER" != 1 ]]; then
+  echo 'XNU_ARMCPU_SWITCH_OBSERVER must be 0 or 1' >&2
+  exit 1
+fi
+python3 - "$SWITCH_OBSERVER" <<'PYSWITCH'
+from pathlib import Path
+import sys
+out = Path('build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837')
+stamp = out / '.armcpu-switch-observer-mode'
+mode = 'switch-observer-v1:' + sys.argv[1]
+if not stamp.exists() or stamp.read_text() != mode:
+    for relative in ('osfmk/DEVELOPMENT/sched_prim.o', 'mach.development.bcm2837.unstripped.noctf'):
+        (out / relative).unlink(missing_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(mode)
+PYSWITCH
+env "XNU_ARMCPU_SWITCH_OBSERVER=$SWITCH_OBSERVER" "XNU_PMUV3_ACTIVE=$PMUV3_ACTIVE" "XNU_ARMCPU_IDLE_EPOCH=$IDLE_EPOCH" "XNU_IRQ_PC_STATS=$IRQ_PC_STATS" "XNU_IRQ_CORRELATION_STATS=$IRQ_CORRELATION_STATS" "XNU_IPI_SIGNAL_STATS=$IPI_SIGNAL_STATS" make -C .cache/xnu-work "${XNU_BUILD_TARGET:-build}" SDKROOT="${XNU_SDKROOT:-iphoneos}" ARCH_CONFIGS=ARM64 \
   MACHINE_CONFIGS=BCM2837 KERNEL_CONFIGS=DEVELOPMENT \
   ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG=arm64 LARGE_MEMORY_DEFINE=-UARM_LARGE_MEMORY \
   ARM64_LINK_ADDR=0xfffffff007004000 ARM64_PLKSEG_ADDR=0xfffffff004004000 \

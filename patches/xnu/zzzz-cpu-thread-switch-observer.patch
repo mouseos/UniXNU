@@ -1,0 +1,28 @@
+--- a/osfmk/kern/sched_prim.c
++++ b/osfmk/kern/sched_prim.c
+@@ -1827,6 +1827,25 @@
+ 
+ 	return waitq_wakeup64_identify(wq, CAST_EVENT64_T(event), THREAD_AWAKENED, priority);
+ }
++
++#if defined(XNU_ARMCPU_SWITCH_OBSERVER) && XNU_ARMCPU_SWITCH_OBSERVER
++/* Experimental current-thread snapshot.  Caller must disable preemption;
++ * this neither proves PMU ownership nor excludes interrupts. */
++bool unixnu_current_thread_switches(uint32_t *out);
++bool
++unixnu_current_thread_switches(uint32_t *out)
++{
++	if (out == NULL || get_preemption_level() <= 0) {
++		return false;
++	}
++	thread_t thread = current_thread();
++	if (thread == THREAD_NULL) {
++		return false;
++	}
++	*out = thread->c_switch;
++	return true;
++}
++#endif
+ 
+ /*
+  *	thread_bind:

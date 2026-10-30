@@ -1,0 +1,12 @@
+--- a/makedefs/MakeInc.rule
++++ b/makedefs/MakeInc.rule
+@@ -510,6 +510,9 @@
+ ifneq ($(XNU_PMUV3_ACTIVE),)
+ override machine_routines.o_CFLAGS_ADD += -DXNU_PMUV3_ACTIVE=$(XNU_PMUV3_ACTIVE)
+ endif
++ifneq ($(XNU_ARMCPU_SWITCH_OBSERVER),)
++override sched_prim.o_CFLAGS_ADD += -DXNU_ARMCPU_SWITCH_OBSERVER=$(XNU_ARMCPU_SWITCH_OBSERVER)
++endif
+ C_RULE_1A=$(_v)$(KCC) -c $(filter-out $($@_CFLAGS_RM), $(CFLAGS) $(CWARNFLAGS)) -MD -MF $(@:o=d) -MJ $(@:o=o.json) -MP $($@_CFLAGS_ADD) $($@_CWARNFLAGS_ADD) $(INCFLAGS) $($@_INCFLAGS)
+ C_RULE_1B=$(<F)
+ C_RULE_2=
