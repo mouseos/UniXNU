@@ -54,7 +54,7 @@ env:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-15-intel
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
@@ -161,8 +161,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          curl -fL https://github.com/owenthereal/upterm/releases/download/v0.38.0/upterm_darwin_arm64.tar.gz -o "$RUNNER_TEMP/upterm.tar.gz"
-          echo "8258498167a8e7671680699f765c4cdf6814fe957256ac3fc7452cbd5ad1366f  $RUNNER_TEMP/upterm.tar.gz" | shasum -a 256 -c -
+          curl -fL https://github.com/owenthereal/upterm/releases/download/v0.38.0/upterm_darwin_amd64.tar.gz -o "$RUNNER_TEMP/upterm.tar.gz"
+          echo "aaca2b92db585c53ed7d7bff723f40a19d2ae8b0c09fa52689bb077a0f64951b  $RUNNER_TEMP/upterm.tar.gz" | shasum -a 256 -c -
           mkdir -p "$RUNNER_TEMP/upterm-bin"
           tar -xzf "$RUNNER_TEMP/upterm.tar.gz" -C "$RUNNER_TEMP/upterm-bin"
           echo "$RUNNER_TEMP/upterm-bin" >> "$GITHUB_PATH"
