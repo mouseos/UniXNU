@@ -44,9 +44,13 @@ while index < len(arguments):
     elif not value.startswith('-W') and value not in ('-MD', '-MP'):
         command.append(value)
     index += 1
+# Older Xcode clang (26.3 and earlier) rejects -Wno-unnecessary-virtual-specifier under -Werror; pass it only when known.
+UNNECESSARY_VIRTUAL = [flag for flag in ['-Wno-unnecessary-virtual-specifier'] if subprocess.run(
+    ['xcrun', 'clang', '-x', 'c++', '-fsyntax-only', '-Werror=unknown-warning-option', flag, '-'],
+    input=b'', stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0]
 command += ['-I', str(out / 'include'), '-I', str(ROOT / '.cache/xnu-work/osfmk'),
             '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-Wno-deprecated-declarations',
-            '-Wno-c99-designator', '-Wno-reorder-init-list', '-Wno-unnecessary-virtual-specifier',
+            '-Wno-c99-designator', '-Wno-reorder-init-list', *UNNECESSARY_VIRTUAL,
             '-Wno-deprecated-enum-enum-conversion']
 (out / 'compile-command.json').write_text(json.dumps(command, indent=2) + '\n')
 r = subprocess.run(command, cwd=record['directory'], capture_output=True, text=True)
