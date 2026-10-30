@@ -43,6 +43,13 @@ on:
         description: Start SSH without the initial kernel or payload build
         type: boolean
         default: false
+      runner:
+        description: "Hosted runner image; macos-15-intel when macOS arm64 capacity is unavailable (selects its newest Xcode 26)"
+        type: choice
+        options:
+          - macos-latest
+          - macos-15-intel
+        default: macos-latest
 
 permissions:
   contents: write
@@ -54,7 +61,7 @@ env:
 
 jobs:
   build:
-    runs-on: macos-15-intel
+    runs-on: ${{ inputs.runner || 'macos-latest' }}
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
@@ -69,6 +76,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      # The Intel image defaults to Xcode 16.4, whose clang predates warning options the drivers use.
+      - name: Select the newest Xcode 26 on Intel
+        if: ${{ runner.arch == 'X64' }}
+        run: |
+          set -euo pipefail
+          app="$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          test -d "$app/Contents/Developer"
+          echo "DEVELOPER_DIR=$app/Contents/Developer" >> "$GITHUB_ENV"
+          DEVELOPER_DIR="$app/Contents/Developer" xcodebuild -version
 
       - name: Install host tools
         run: |
@@ -161,8 +178,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          curl -fL https://github.com/owenthereal/upterm/releases/download/v0.38.0/upterm_darwin_amd64.tar.gz -o "$RUNNER_TEMP/upterm.tar.gz"
-          echo "aaca2b92db585c53ed7d7bff723f40a19d2ae8b0c09fa52689bb077a0f64951b  $RUNNER_TEMP/upterm.tar.gz" | shasum -a 256 -c -
+          case "$(uname -m)" in
+            arm64) upterm_arch=arm64 upterm_sha=8258498167a8e7671680699f765c4cdf6814fe957256ac3fc7452cbd5ad1366f ;;
+            x86_64) upterm_arch=amd64 upterm_sha=aaca2b92db585c53ed7d7bff723f40a19d2ae8b0c09fa52689bb077a0f64951b ;;
+            *) echo "unsupported runner architecture" >&2; exit 1 ;;
+          esac
+          curl -fL "https://github.com/owenthereal/upterm/releases/download/v0.38.0/upterm_darwin_$upterm_arch.tar.gz" -o "$RUNNER_TEMP/upterm.tar.gz"
+          echo "$upterm_sha  $RUNNER_TEMP/upterm.tar.gz" | shasum -a 256 -c -
           mkdir -p "$RUNNER_TEMP/upterm-bin"
           tar -xzf "$RUNNER_TEMP/upterm.tar.gz" -C "$RUNNER_TEMP/upterm-bin"
           echo "$RUNNER_TEMP/upterm-bin" >> "$GITHUB_PATH"
@@ -195,6 +217,7 @@ jobs:
           umask 077
           {
             echo "export PATH='$PATH'"
+            if [ -n "${DEVELOPER_DIR:-}" ]; then echo "export DEVELOPER_DIR='$DEVELOPER_DIR'"; fi
             echo "export UNIQUE_CHIP_ID='$UNIQUE_CHIP_ID'"
             echo "export GH_TOKEN='$GH_TOKEN' GITHUB_TOKEN='$GH_TOKEN'"
             echo "export GITHUB_WORKSPACE='$GITHUB_WORKSPACE' RUNNER_TEMP='$RUNNER_TEMP' GITHUB_REPOSITORY='$GITHUB_REPOSITORY'"
