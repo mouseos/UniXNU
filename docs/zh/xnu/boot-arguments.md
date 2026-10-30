@@ -94,6 +94,7 @@ if (PE_parse_boot_argn("my-driver-stage", &stage, sizeof(stage))) {
 | 平台停点 | `sheng-platform-stage=<n>` |
 | 存储细节 | `native-ufs-root=1 native-ufs-stats-delay=30` |
 | 显示细节 | `offline-legacy-gop=1 offline-legacy-phase=<n>` |
+| CPU 扫描输出复制使用写合并映射（NativeMobileDisplay） | `offline-legacy-fb-wc=1` |
 | 代码签名细节 | `cs_debug=<mask>` |
 
 panic 日志记录最后的内核输出。设置 `XNU_DT_PANIC_REGION` 时，内嵌 panic 区域从设备树读取。
