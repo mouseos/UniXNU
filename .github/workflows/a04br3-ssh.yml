@@ -39,6 +39,10 @@ on:
         description: Minutes the runner stays after the first build (1 to 330)
         required: true
         default: "330"
+      ssh_only:
+        description: Start SSH without the initial kernel or payload build
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -238,6 +242,7 @@ jobs:
 
       - name: First build
         id: first
+        if: ${{ !inputs.ssh_only }}
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
