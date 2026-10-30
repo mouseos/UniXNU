@@ -56,7 +56,11 @@ while i < len(args):
     i += 1
     if v in ('-MF', '-MJ'):
         i += 1
-cmd += ['-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-Wno-unnecessary-virtual-specifier', '-Wno-c99-designator',
+# Older Xcode clang (26.3 and earlier) rejects -Wno-unnecessary-virtual-specifier under -Werror; pass it only when known.
+UNNECESSARY_VIRTUAL = [flag for flag in ['-Wno-unnecessary-virtual-specifier'] if subprocess.run(
+    ['xcrun', 'clang', '-x', 'c++', '-fsyntax-only', '-Werror=unknown-warning-option', flag, '-'],
+    input=b'', stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0]
+cmd += ['-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', *UNNECESSARY_VIRTUAL, '-Wno-c99-designator',
         '-Wno-reorder-init-list', '-Wno-deprecated-enum-enum-conversion', '-Wno-overloaded-virtual',
         '-I', str(ROOT / '.cache/xnu-work/osfmk')]
 subprocess.run(cmd, cwd=record['directory'], check=True)
