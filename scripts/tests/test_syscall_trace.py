@@ -163,6 +163,9 @@ with tempfile.TemporaryDirectory() as d:
 script = (root / 'scripts/build-xnu-4k-baseline.sh').read_text()
 assert 'XNU_SYSCALL_TRACE:-0' in script and 'bsd/DEVELOPMENT/systemcalls.o' in script
 assert '-DXNU_SYSCALL_TRACE=$SYSCALL_TRACE' in script
+# The BSD side includes <arm64/unixnu_systrace.h>, which only resolves when osfmk/arm64 exports it.
+makefile = next(h for h in hunks if h.startswith('a/osfmk/arm64/Makefile'))
+assert '+	unixnu_systrace.h' in makefile and 'EXPORT_MD_LIST' in makefile
 assert 'THREAD_CALL_PRIORITY_KERNEL' in core and 'unixnu_systrace_on() && unixnu_systrace_wants' in patch
 print('PASS: syscall profile counts, failing sample, restart codes, long paths, entry-only calls, order, reset, window limit, opt-in flag')
 
