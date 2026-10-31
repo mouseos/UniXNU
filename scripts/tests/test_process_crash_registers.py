@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Run the actual crash-register block of patches/xnu/zzzzz-process-crash-registers.patch against a mock exiting thread:
-the ucp= name filter, the 32-crash budget, the frame chain (stops on a failed read, a non-ascending or misaligned frame
+the ucp= name filter (and ucp=all), the 32-crash budget, the frame chain (stops on a failed read, a non-ascending or misaligned frame
 pointer, 26 entries at most), the shared-region marking and the Mach-O header walk for frames outside it."""
 from pathlib import Path
 import subprocess, tempfile
@@ -59,11 +59,13 @@ int main(void) {
   /* header + pc + lr + 3 chain entries */
   assert(lines == 6); assert(strstr(last, "bt4=0x18f00aaaa cache image=0x0"));
   lines = 0; cur = 0; run(&p, 11, 0, (void *)1, &ut); assert(lines == 0); cur = &p;  /* not the exiting process */
+  struct proc q = {"Preferences"}; lines = 0; cur = &q; bootarg = "all"; run(&q, 11, 0, (void *)1, &ut); assert(lines == 6); cur = &p; bootarg = "iconservicesagent";  /* ucp=all */
   regs.pc = 0x104012345ULL; regs.fp = 0x16f000301ULL; /* misaligned frame pointer: registers only */
   run(&p, 11, 0, (void *)1, &ut); assert(lines == 3); assert(strstr(last, "lr1=0x18f001234 cache image=0x0"));
+  /* 3 crashes so far */
   for (int i = 0; i < 40; i++) { lines = 0; run(&p, 11, 0, (void *)1, &ut); }
   assert(lines == 0); /* 32 per boot */
-  puts("PASS: ucp filter, exiting-process check, frame chain stops, cache marking, header walk, 32-crash budget");
+  puts("PASS: ucp filter and ucp=all, exiting-process check, frame chain stops, cache marking, header walk, 32-crash budget");
   return 0; }
 '''
 with tempfile.TemporaryDirectory() as d:

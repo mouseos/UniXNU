@@ -34,7 +34,7 @@ The joined line is at most 1000 bytes. DarwinBoot copies it into a 1024-byte buf
 | `zlog=<name>` | Selects the zone log |
 | `exception_log_max_pid=<n>` | Development kernel: logs every user exception and crash exit reason of processes up to PID n (`[System Event]` lines) |
 | `unixnu-exit-process=<name>` | Kernel built with `XNU_PROCESS_EXIT_DIAG=1`: one line per exit of that process (status, exit reason) |
-| `ucp=<name>` | Kernel built with `XNU_PROCESS_EXIT_DIAG=1`: when that process crashes, its PC, LR, SP, FP, the shared cache start and the user frame chain (`unixnu crash` lines, 32 crashes per boot); frames outside the shared region also get their Mach-O header |
+| `ucp=<name>`, `ucp=all` | Kernel built with `XNU_PROCESS_EXIT_DIAG=1`: when that process crashes, its PC, LR, SP, FP, the shared cache start and the user frame chain (`unixnu crash` lines, 32 crashes per boot); frames outside the shared region also get their Mach-O header |
 
 Use `amfi_get_out_of_my_way=1` only in a diagnostic boot. It changes the security policy.
 
