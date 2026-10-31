@@ -16,7 +16,7 @@
  		etype = ut->uu_exception;
 +#if defined(XNU_PROCESS_EXIT_DIAG) && XNU_PROCESS_EXIT_DIAG && defined(__arm64__)
 +		/*
-+		 * Opt-in (boot argument ucp=<name>, exact process name, or ucp=all): the crashing thread's own registers, where the shared cache
++		 * Opt-in (boot argument ucp=<name>, exact process name, or ucp=all / ucp=1 for every process): the crashing thread's own registers, where the shared cache
 +		 * starts in this task (an address minus the cache's unslid base gives its offset), and the user frame chain. A frame
 +		 * outside the shared region also gets the Mach-O header found by walking back page by page (a plugin or the main
 +		 * executable). At most 32 crashes per boot; only this exiting thread's own memory is read, with copyin.
@@ -29,7 +29,7 @@
 +			crash_diag_name[sizeof(crash_diag_name) - 1] = '\0';
 +			struct arm_saved_state *crash_state = find_user_regs(self);
 +			if (crash_diag_name[0] && p == current_proc() && crash_state &&
-+			    (!strcmp(crash_diag_name, "all") || !strncmp(crash_diag_name, p->p_name, sizeof(crash_diag_name))) &&
++			    (!strcmp(crash_diag_name, "all") || !strcmp(crash_diag_name, "1") || !strncmp(crash_diag_name, p->p_name, sizeof(crash_diag_name))) &&
 +			    __atomic_fetch_add(&crash_diag_count, 1, __ATOMIC_RELAXED) < 32) {
 +				mach_vm_offset_t cache_start = 0;
 +				vm_shared_region_t crash_region = task ? vm_shared_region_get(task) : NULL;
