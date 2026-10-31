@@ -56,6 +56,10 @@ on:
         description: Mark Setup as done in the Data seed
         type: boolean
         default: false
+      payload_args:
+        description: "Extra unixnu build payload arguments (optional), e.g. --omit-kernel-arg NAME or --kernel-arg NAME=VALUE"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -230,17 +234,22 @@ jobs:
           UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
           SKIP_SETUP: ${{ inputs.skip_setup }}
           OWNER_TRUST_CACHE: ${{ inputs.owner_trust_cache }}
+          PAYLOAD_ARGS: ${{ inputs.payload_args }}
         run: |
           args=()
           if [ -f "$RUNNER_TEMP/trustcache" ]; then
-            if [ "$OWNER_TRUST_CACHE" = true ]; then
+            # A pre_build step that replaces the trust cache with an owner bundle marks it with trustcache.owner.
+            if [ "$OWNER_TRUST_CACHE" = true ] || [ -f "$RUNNER_TEMP/trustcache.owner" ]; then
               args+=(--owner-trust-cache "$RUNNER_TEMP/trustcache")
             else
               args+=(--trust-cache "$RUNNER_TEMP/trustcache")
             fi
           fi
           if [ -f "$RUNNER_TEMP/data.dbr" ]; then args+=(--data-ramdisk "$RUNNER_TEMP/data.dbr"); fi
+          # A GPU addon (scripts/make-gpu-addon.py format) left by the pre_build step.
+          if [ -f "$RUNNER_TEMP/gpu-addon" ]; then args+=(--gpu-addon "$RUNNER_TEMP/gpu-addon"); fi
           if [ "$SKIP_SETUP" = true ]; then args+=(--skip-setup); fi
+          if [ -n "$PAYLOAD_ARGS" ]; then read -r -a extra <<< "$PAYLOAD_ARGS"; args+=("${extra[@]}"); fi
           ./unixnu build payload "${args[@]}"
 
       - name: Collect the text logs
@@ -313,4 +322,4 @@ jobs:
         if: always()
         run: |
           rm -rf out/ipsw out/feeds device/.cache/firmware out/*/tree/.cache/firmware out/*/payload/data-skip-setup-* out/*/*/*/tree/.cache/firmware out/*/*/*/payload/data-skip-setup-*
-          rm -f "$RUNNER_TEMP/trustcache" "$RUNNER_TEMP/data.dbr" "$RUNNER_TEMP/data-grow.dbr"
+          rm -f "$RUNNER_TEMP/trustcache" "$RUNNER_TEMP/trustcache.owner" "$RUNNER_TEMP/gpu-addon" "$RUNNER_TEMP/data.dbr" "$RUNNER_TEMP/data-grow.dbr"
