@@ -14,7 +14,7 @@
  #include <stdatomic.h>
  
  #include <sys/param.h>
-@@ -1958,6 +1965,71 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
+@@ -1958,6 +1965,72 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
  		    ((int)ut->uu_code & 0xfffff);
  		subcode = ut->uu_subcode;
  		etype = ut->uu_exception;
@@ -28,7 +28,8 @@
 +		{
 +			static uint32_t crash_diag_count;
 +			char crash_diag_name[sizeof(p->p_name)] = "";
-+			(void)PE_parse_boot_argn("ucp", crash_diag_name, sizeof(crash_diag_name));
++			/* As a string: PE_parse_boot_argn would store ucp=1 as the number 1. */
++			(void)PE_parse_boot_arg_str("ucp", crash_diag_name, sizeof(crash_diag_name));
 +			crash_diag_name[sizeof(crash_diag_name) - 1] = '\0';
 +			struct arm_saved_state *crash_state = find_user_regs(self);
 +			if (crash_diag_name[0] && p == current_proc() && crash_state &&

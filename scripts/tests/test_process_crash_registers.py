@@ -28,7 +28,9 @@ struct uthread { int uu_exception; long long uu_code, uu_subcode; };
 struct proc { char p_name[33]; };
 static struct proc *cur; static const char *bootarg; static struct arm_saved_state regs; static int lines; static char last[256];
 static struct proc *current_proc(void) { return cur; }
-static int PE_parse_boot_argn(const char *k, void *o, int n) { (void)k; if (!bootarg) return 0; snprintf(o, n, "%s", bootarg); return 1; }
+/* XNU stores a numeric value (ucp=1) as a number with PE_parse_boot_argn; only PE_parse_boot_arg_str keeps the text. */
+static int PE_parse_boot_argn(const char *k, void *o, int n) { (void)k; if (!bootarg) return 0; if (bootarg[0] >= '0' && bootarg[0] <= '9') { long long v = 0; sscanf(bootarg, "%lld", &v); memset(o, 0, n); memcpy(o, &v, n < 8 ? n : 8); } else snprintf(o, n, "%s", bootarg); return 1; }
+static int PE_parse_boot_arg_str(const char *k, char *o, int n) { (void)k; if (!bootarg) return 0; snprintf(o, n, "%s", bootarg); return 1; }
 struct arm_saved_state *find_user_regs(thread_t t) { (void)t; return &regs; }
 static uint64_t get_saved_state_pc(struct arm_saved_state *s) { return s->pc; }
 static uint64_t get_saved_state_lr(struct arm_saved_state *s) { return s->lr; }
