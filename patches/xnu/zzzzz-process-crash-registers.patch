@@ -1,0 +1,85 @@
+--- a/bsd/kern/kern_exit.c
++++ b/bsd/kern/kern_exit.c
+@@ -75,6 +75,9 @@
+ 
+ #include <machine/reg.h>
+ #include <machine/psl.h>
++#include <vm/vm_shared_region.h>
++#include <mach/shared_region.h>
++#include <mach/thread_status.h>
+ #include <stdatomic.h>
+ 
+ #include <sys/param.h>
+@@ -1958,6 +1961,72 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
+ 		    ((int)ut->uu_code & 0xfffff);
+ 		subcode = ut->uu_subcode;
+ 		etype = ut->uu_exception;
++#if defined(XNU_PROCESS_EXIT_DIAG) && XNU_PROCESS_EXIT_DIAG && defined(__arm64__)
++		/*
++		 * Opt-in (boot argument ucp=<name>, exact process name): the crashing thread's own registers, where the shared cache
++		 * starts in this task (an address minus the cache's unslid base gives its offset), and the user frame chain. A frame
++		 * outside the shared region also gets the Mach-O header found by walking back page by page (a plugin or the main
++		 * executable). At most 32 crashes per boot; only this exiting thread's own memory is read, with copyin.
++		 */
++		{
++			extern struct arm_saved_state *find_user_regs(thread_t);
++			static uint32_t crash_diag_count;
++			char crash_diag_name[sizeof(p->p_name)] = "";
++			(void)PE_parse_boot_argn("ucp", crash_diag_name, sizeof(crash_diag_name));
++			crash_diag_name[sizeof(crash_diag_name) - 1] = '\0';
++			struct arm_saved_state *crash_state = find_user_regs(self);
++			if (crash_diag_name[0] && p == current_proc() && crash_state &&
++			    !strncmp(crash_diag_name, p->p_name, sizeof(crash_diag_name)) &&
++			    __atomic_fetch_add(&crash_diag_count, 1, __ATOMIC_RELAXED) < 32) {
++				mach_vm_offset_t cache_start = 0;
++				vm_shared_region_t crash_region = task ? vm_shared_region_get(task) : NULL;
++				if (crash_region) {
++					if (vm_shared_region_start_address(crash_region, &cache_start, task) != KERN_SUCCESS) {
++						cache_start = 0;
++					}
++					vm_shared_region_deallocate(crash_region);
++				}
++				const uint64_t crash_pc = get_saved_state_pc(crash_state), crash_lr = get_saved_state_lr(crash_state);
++				uint64_t crash_fp = get_saved_state_fp(crash_state);
++				printf("unixnu crash pid=%d name=%s sig=%d exc=%d code=0x%llx subcode=0x%llx pc=0x%llx lr=0x%llx sp=0x%llx fp=0x%llx cache=0x%llx\n",
++				    proc_getpid(p), p->p_name, WTERMSIG(rv), ut->uu_exception, (unsigned long long)ut->uu_code,
++				    (unsigned long long)ut->uu_subcode, (unsigned long long)crash_pc, (unsigned long long)crash_lr,
++				    (unsigned long long)get_saved_state_sp(crash_state), (unsigned long long)crash_fp,
++				    (unsigned long long)cache_start);
++				uint64_t crash_frames[26] = {crash_pc, crash_lr};
++				unsigned crash_count = 2, crash_headers = 0;
++				for (; crash_count < 26 && crash_fp && !(crash_fp & 7); crash_count++) {
++					uint64_t frame[2];
++					if (copyin((user_addr_t)crash_fp, frame, sizeof(frame))) {
++						break;
++					}
++					crash_frames[crash_count] = frame[1];
++					if (frame[0] <= crash_fp) {
++						crash_count++;
++						break;
++					}
++					crash_fp = frame[0];
++				}
++				for (unsigned i = 0; i < crash_count; i++) {
++					const uint64_t address = crash_frames[i];
++					uint64_t header = 0;
++					const bool in_region = address >= SHARED_REGION_BASE_ARM64 && address < SHARED_REGION_BASE_ARM64 + SHARED_REGION_SIZE_ARM64;
++					if (address && !in_region && crash_headers < 4) {
++						crash_headers++;
++						for (uint64_t page = address & ~(uint64_t)0x3fff, steps = 0; page && steps < 4096; page -= 0x4000, steps++) {
++							uint32_t magic = 0;
++							if (copyin((user_addr_t)page, &magic, sizeof(magic)) == 0 && magic == 0xfeedfacf) {
++								header = page;
++								break;
++							}
++						}
++					}
++					printf("unixnu crash pid=%d %s%u=0x%llx%s image=0x%llx\n", proc_getpid(p), i == 0 ? "pc" : (i == 1 ? "lr" : "bt"),
++					    i, (unsigned long long)address, in_region ? " cache" : "", (unsigned long long)header);
++				}
++			}
++		}
++#endif
+ 
+ 		/* Defualt to EXC_CRASH if the exception is not an EXC_RESOURCE or EXC_GUARD */
+ 		if (etype != EXC_RESOURCE || etype != EXC_GUARD) {
