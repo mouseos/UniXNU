@@ -232,9 +232,10 @@ jobs:
             if [ "${{ inputs.skip_setup }}" = "true" ]; then echo "export SKIP_SETUP_ARG=--skip-setup"; else echo "export SKIP_SETUP_ARG="; fi
             if [ "${{ inputs.powervr_probe }}" = "true" ]; then
               echo "export A04BR3_POWERVR_PROBE=1 TRUST_CACHE_ARG=--owner-trust-cache"
-              if [ "${{ inputs.powervr_metal }}" = "true" ]; then echo "export A04BR3_POWERVR_VULKAN=1 A04BR3_POWERVR_METAL=1"; fi
+              if [ "${{ inputs.powervr_metal }}" = "true" ]; then echo "export A04BR3_POWERVR_VULKAN=1 A04BR3_POWERVR_METAL=1"; else echo "export A04BR3_POWERVR_METAL=0"; fi
             else
-              echo "export TRUST_CACHE_ARG=--trust-cache"
+              # Explicit: the device pre-build otherwise defaults to the GPU configuration (probe, Metal, addon).
+              echo "export A04BR3_POWERVR_PROBE=0 A04BR3_POWERVR_METAL=0 TRUST_CACHE_ARG=--trust-cache"
             fi
             echo "cd '$GITHUB_WORKSPACE'"
           } > "$RUNNER_TEMP/a04br3.env"
