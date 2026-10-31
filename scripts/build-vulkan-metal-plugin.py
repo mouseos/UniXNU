@@ -36,6 +36,7 @@ parser.add_argument('--identifier', help='bundle identifier (default org.unixnu.
 parser.add_argument('--driver-identifier', help='code signing identifier of the driver (default org.unixnu.<driver stem>)')
 parser.add_argument('--out', type=Path)
 parser.add_argument('--skip-bridge', action='store_true', help='use the existing build/native-metal-bridge/ios/libnative_metal_bridge.a')
+parser.add_argument('--runtime-commit-trace', action='store_true', help='compile opt-in runtime commit phase instrumentation')
 parser.add_argument('--portable-sha2', action='store_true', help='build the bridge without requiring CPU SHA2 instructions')
 args = parser.parse_args()
 
@@ -56,28 +57,35 @@ identifier = args.identifier or 'org.unixnu.' + args.name
 driver_identifier = args.driver_identifier or 'org.unixnu.' + Path(driver_name).stem
 
 OUT = (args.out or ROOT / 'build/vulkan-metal-plugin' / args.name).resolve()
-if OUT.exists():
-    shutil.rmtree(OUT)
-bundle = OUT / (args.name + '.bundle')
-bundle.mkdir(parents=True)
 BRIDGE = ROOT / 'build/native-metal-bridge/ios/libnative_metal_bridge.a'
 if not (args.skip_bridge and BRIDGE.is_file()):
     subprocess.run(['python3', ROOT / 'scripts/build-native-metal-bridge.py', '--target', 'ios'] +
-                   (['--portable-sha2'] if args.portable_sha2 else []), check=True)
-elif args.portable_sha2:
+                   (['--portable-sha2'] if args.portable_sha2 else []) +
+                   (['--runtime-commit-trace'] if args.runtime_commit_trace else []), check=True)
+else:
     import hashlib
     record = BRIDGE.with_suffix('.json')
     metadata = json.loads(record.read_text()) if record.is_file() else {}
     with BRIDGE.open('rb') as stream:
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-    if metadata.get('target') != 'ios' or metadata.get('portable_sha2') is not True or metadata.get('library_sha256') != digest:
+    if metadata.get('target') != 'ios' or metadata.get('library_sha256') != digest:
+        raise SystemExit('Existing bridge metadata or digest is invalid; rebuild without --skip-bridge')
+    if args.portable_sha2 and metadata.get('portable_sha2') is not True:
         raise SystemExit('Existing bridge is not portable SHA2; rebuild without --skip-bridge')
+    if metadata.get('runtime_commit_trace', False) != args.runtime_commit_trace:
+        raise SystemExit('Existing bridge has a different commit trace feature; rebuild without --skip-bridge')
+if OUT.exists():
+    shutil.rmtree(OUT)
+bundle = OUT / (args.name + '.bundle')
+bundle.mkdir(parents=True)
 sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
 base = ['-target', 'arm64-apple-ios17.0', '-isysroot', sdk, '-O2', '-g', '-Wall', '-Wextra', '-Werror', '-fstack-protector-strong']
 includes = ['-I', str(ROOT / 'drivers/NativeMetal')]
 for directory in args.include:
     includes += ['-I', str(directory.resolve())]
 defines = ['-DNATIVE_METAL_PLUGIN_CLASS=' + args.principal_class, '-DNATIVE_METAL_VULKAN_DRIVER="%s"' % driver_name]
+if args.runtime_commit_trace:
+    defines += ['-DNMB_RUNTIME_COMMIT_TRACE=1']
 objects = []
 for source in [ROOT / 'drivers/NativeMetal/NativeVulkanMetalPlugin.mm', ROOT / 'drivers/NativeMetal/NativeBridgeMetalFrontend.mm', *sources]:
     obj = OUT / (source.stem + '.o')

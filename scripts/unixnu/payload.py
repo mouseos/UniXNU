@@ -31,10 +31,24 @@ def check_args(arguments):
         if not re.fullmatch(r'[A-Za-z0-9_.\-]+(=[A-Za-z0-9_.,\-]+)?', value):
             raise Error(f'unsupported kernel argument: {value}')
     line = ' '.join(arguments)
-    # DarwinBoot copies the command line into a 1024-byte buffer and refuses a longer one.
-    if len(line) > 1000:
-        raise Error(f'the kernel command line is {len(line)} bytes; the limit is 1000')
+    # DarwinBoot accepts ASCII into a 1024-byte buffer, including its trailing NUL.
+    if len(line.encode("ascii")) > 1023:
+        raise Error(f'the kernel command line is {len(line)} bytes; the limit is 1023')
     return line
+
+
+def check_confirmation_args(line, options):
+    # Menu joins the selected suffix using one space; DarwinBoot requires ASCII
+    # and reserves one byte in CommandLine[1024] for its trailing NUL.
+    for suffix in options:
+        if not isinstance(suffix, str):
+            raise Error('confirmation argument must be a string')
+        try:
+            length = len((line + ' ' + suffix).encode('ascii'))
+        except UnicodeEncodeError:
+            raise Error('confirmation argument must be ASCII')
+        if length > 1023:
+            raise Error(f'confirmed kernel command line is {length} bytes; the limit is 1023')
 
 
 def kernel_arguments(board, extra, omitted):
@@ -103,6 +117,8 @@ def build(ctx, kernel=None):
     kernel = expand(kernel or getattr(args, 'kernel', None) or ctx.work / 'kernel/kernel.macho')
     if not kernel.is_file():
         raise Error(f'kernel not found: {kernel}; run "unixnu build kernel" or pass --kernel FILE')
+    from . import kernel as kernel_module
+    kernel_module.validate_candidate(ctx, kernel)
     extra = list(getattr(args, 'kernel_arg', None) or [])
     arguments = kernel_arguments(spec.get('kernel_args', []), extra,
                                  getattr(args, 'omit_kernel_arg', None) or [])
@@ -193,6 +209,7 @@ def build(ctx, kernel=None):
         titles, extra = install.get('confirm_titles', []), install.get('confirm_args', [])
         if not install.get('confirm') or not titles or len(titles) != len(extra):
             raise Error('board.toml [payload.install] needs confirm and equally long confirm_titles and confirm_args')
+        check_confirmation_args(line, extra)
         # The second boot menu entry: the same kernel and seed behind a confirmation whose choices add a boot argument (for example the Data reset).
         config += (f'[[entry]]\nid = "install"\ntitle = {json.dumps(install.get("title", "Install and boot"))}\n'
                    f'confirm = {json.dumps(install["confirm"])}\nconfirm_titles = {json.dumps(titles)}\nconfirm_args = {json.dumps(extra)}\n'

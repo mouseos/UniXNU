@@ -127,8 +127,7 @@ def cmd_build(ctx):
         need_uefi(ctx)   # fail before fetching anything
     modules = prepare(ctx, steps + (['kernel'] if 'prelink' in steps else []))
     if 'kernel' in steps:
-        kernel.build(ctx, modules)
-        kernel.prelink(ctx)
+        kernel.build_checked(ctx, modules)
     elif 'prelink' in steps:
         kernel.prelink(ctx)
     if 'package' in steps:

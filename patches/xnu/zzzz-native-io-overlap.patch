@@ -1,0 +1,129 @@
+diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
+index fc08983..d19977e 100644
+--- a/bsd/kern/ubc_subr.c
++++ b/bsd/kern/ubc_subr.c
+@@ -5980,6 +5980,92 @@ struct native_cs_io_timing { int unused; };
+ #define native_cs_io_finish(t, batched) ((void)(t))
+ #endif
+ 
++/* Optional bounded correlation trace. The registry retains numerical identities
++ * only, never references. Neither addresses nor vnode IDs are printed. */
++#if defined(XNU_IO_OVERLAP_TRACE) && XNU_IO_OVERLAP_TRACE && defined(XNU_ROOT_TIMING) && XNU_ROOT_TIMING
++struct native_cs_trace_key { uintptr_t address; uint32_t vid; uint64_t id; };
++struct native_cs_trace_event {
++ uint64_t id, op, start, end, tid, base, bytes, reads; int pid, error;
++};
++struct native_cs_trace_state {
++ unsigned lock, reporter; uint64_t next_id, next_op, used, n, full, busy, keys_full, report_seq;
++ struct native_cs_trace_key keys[64]; struct native_cs_trace_event events[32], snapshot[32];
++};
++static struct native_cs_trace_state native_cs_trace;
++static struct native_cs_trace_event
++native_cs_trace_begin(vnode_t vp, uint64_t base)
++{
++ struct native_cs_trace_event e = {0}; unsigned flag = 0;
++ if (!PE_parse_boot_argn("native-io-trace", &flag, sizeof(flag)) || flag != 1) return e;
++ if (!vnode_vfsisrdonly(vp)) return e;
++ uint32_t vid = vnode_vid(vp);
++ e.pid = proc_selfpid(); e.tid = thread_tid(current_thread()); e.base = base;
++ e.start = native_blob_now();
++ if (__atomic_exchange_n(&native_cs_trace.lock, 1u, __ATOMIC_ACQUIRE)) {
++  __atomic_fetch_add(&native_cs_trace.busy, 1ULL, __ATOMIC_RELAXED); return e;
++ }
++ unsigned i;
++ for (i = 0; i < native_cs_trace.used; ++i)
++  if (native_cs_trace.keys[i].address == (uintptr_t)vp && native_cs_trace.keys[i].vid == vid) break;
++ if (i == native_cs_trace.used && i < 64) {
++  native_cs_trace.keys[i] = (struct native_cs_trace_key){(uintptr_t)vp, vid, ++native_cs_trace.next_id};
++  ++native_cs_trace.used;
++ }
++ if (i == 64) ++native_cs_trace.keys_full;
++ else {
++  e.id = native_cs_trace.keys[i].id; e.op = ++native_cs_trace.next_op;
++  if (native_cs_trace.n == 32) ++native_cs_trace.full;
++  else native_cs_trace.events[native_cs_trace.n++] = e; /* end=0: started */
++ }
++ __atomic_store_n(&native_cs_trace.lock, 0u, __ATOMIC_RELEASE);
++ return e;
++}
++static void
++native_cs_trace_end(struct native_cs_trace_event *e, int error)
++{
++ if (!e->id) return;
++ e->end = native_blob_now(); e->error = error;
++ if (__atomic_exchange_n(&native_cs_trace.lock, 1u, __ATOMIC_ACQUIRE)) {
++  __atomic_fetch_add(&native_cs_trace.busy, 1ULL, __ATOMIC_RELAXED); return;
++ }
++ if (native_cs_trace.n == 32) ++native_cs_trace.full;
++ else native_cs_trace.events[native_cs_trace.n++] = *e;
++ __atomic_store_n(&native_cs_trace.lock, 0u, __ATOMIC_RELEASE);
++}
++/* Single reporter copies under try-lock and prints outside it. */
++void native_cs_trace_report(void);
++void
++native_cs_trace_report(void)
++{
++ unsigned flag = 0;
++ if (!PE_parse_boot_argn("native-io-trace", &flag, sizeof(flag)) || flag != 1) return;
++ if (__atomic_exchange_n(&native_cs_trace.reporter, 1u, __ATOMIC_ACQUIRE)) return;
++ if (__atomic_exchange_n(&native_cs_trace.lock, 1u, __ATOMIC_ACQUIRE)) {
++  __atomic_store_n(&native_cs_trace.reporter, 0u, __ATOMIC_RELEASE); return;
++ }
++ uint64_t n = native_cs_trace.n, full = native_cs_trace.full, keys_full = native_cs_trace.keys_full;
++ memcpy(native_cs_trace.snapshot, native_cs_trace.events, n * sizeof(native_cs_trace.events[0]));
++ native_cs_trace.n = native_cs_trace.full = native_cs_trace.keys_full = 0;
++ __atomic_store_n(&native_cs_trace.lock, 0u, __ATOMIC_RELEASE);
++ uint64_t busy = __atomic_exchange_n(&native_cs_trace.busy, 0ULL, __ATOMIC_RELAXED);
++ uint64_t seq = ++native_cs_trace.report_seq;
++ printf("CS overlap begin seq=%llu count=%llu full=%llu busy=%llu keys_full=%llu\n", (unsigned long long)seq, (unsigned long long)n, (unsigned long long)full, (unsigned long long)busy, (unsigned long long)keys_full);
++ for (uint64_t i = 0; i < n; ++i) {
++  struct native_cs_trace_event *e = &native_cs_trace.snapshot[i];
++  printf("CS overlap event seq=%llu id=%llu op=%llu pid=%d tid=%llu start=%llu end=%llu base=%llu bytes=%llu reads=%llu error=%d\n",
++      (unsigned long long)seq, (unsigned long long)e->id, (unsigned long long)e->op, e->pid, (unsigned long long)e->tid,
++      (unsigned long long)e->start, (unsigned long long)e->end, (unsigned long long)e->base,
++      (unsigned long long)e->bytes, (unsigned long long)e->reads, e->error);
++ }
++ printf("CS overlap end seq=%llu count=%llu\n", (unsigned long long)seq, (unsigned long long)n);
++ __atomic_store_n(&native_cs_trace.reporter, 0u, __ATOMIC_RELEASE);
++}
++#else
++struct native_cs_trace_event { uint64_t bytes, reads; };
++#define native_cs_trace_begin(vp, base) ((struct native_cs_trace_event){0})
++#define native_cs_trace_end(e, error) ((void)(e), (void)(error))
++#endif
++
+ __attribute__((noinline))
+ static int
+ cs_native4k_prepare(vnode_t vp, struct cs_blob *blob)
+@@ -5994,6 +6080,7 @@ cs_native4k_prepare(vnode_t vp, struct cs_blob *blob)
+ 	kern_return_t kr;
+ 	unsigned read_size = 16384, batch_flag = 0;
+ 	struct native_cs_io_timing io_timing = native_cs_io_begin();
++	struct native_cs_trace_event cs_trace = {0};
+ 
+ 	if (blob->csb_hash_pageshift <= PAGE_SHIFT) {
+ 		native_cs_io_finish(&io_timing, 0);
+@@ -6029,6 +6116,7 @@ cs_native4k_prepare(vnode_t vp, struct cs_blob *blob)
+ 	if (vnode_vfsisrdonly(vp) && PE_parse_boot_argn("native-cs-read-batch", &batch_flag, sizeof(batch_flag)) && batch_flag == 1) read_size = 256 * 1024;
+ 	buffer = kalloc_data(read_size, Z_WAITOK);
+ 	if (buffer == NULL) { error = ENOMEM; goto out; }
++	cs_trace = native_cs_trace_begin(vp, (uint64_t)blob->csb_base_offset);
+ 	for (offset = 0; offset < limit;) {
+ 		const char *lower = blob->csb_mem_kaddr;
+ 		const char *upper = lower + blob->csb_mem_size;
+@@ -6041,6 +6129,7 @@ cs_native4k_prepare(vnode_t vp, struct cs_blob *blob)
+ 			goto out;
+ 		}
+ 		(void)last;
++		cs_trace.reads++; cs_trace.bytes += length;
+ 		native_cs_io_read(&io_timing, length);
+ 		uint64_t stamp = native_cs_io_start(&io_timing);
+ 		error = vn_rdwr(UIO_READ, vp, (caddr_t)buffer, (int)length, position,
+@@ -6092,6 +6181,7 @@ cs_native4k_prepare(vnode_t vp, struct cs_blob *blob)
+ 	os_atomic_inc(&cs_native4k_ready_blobs, relaxed);
+ 	error = 0;
+ out:
++	native_cs_trace_end(&cs_trace, error);
+ 	if (buffer) kfree_data(buffer, read_size);
+ 	if (storage) {
+ 		kmem_free(kernel_map, storage, allocation);

@@ -1,0 +1,34 @@
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -42,6 +42,7 @@
+ #include <arm/cpu_capabilities.h>
+ #include <console/serial_protos.h>
+ #include <kern/machine.h>
++#include <kern/cpu_number.h>
+ #include <kern/misc_protos.h>
+ #include <prng/random.h>
+ #include <kern/startup.h>
+@@ -1587,11 +1588,23 @@
+  *	Routine:        cause_ast_check
+  *	Function:
+  */
++#if defined(XNU_IPI_SIGNAL_STATS) && XNU_IPI_SIGNAL_STATS
++extern void native_ast_caller_sample(unsigned, uint64_t) __attribute__((weak_import));
++extern unsigned native_ast_caller_enabled __attribute__((weak_import));
++#endif
+ void
+ cause_ast_check(
+ 	processor_t processor)
+ {
+ 	if (current_processor() != processor) {
++#if defined(XNU_IPI_SIGNAL_STATS) && XNU_IPI_SIGNAL_STATS
++		if (native_ast_caller_sample && &native_ast_caller_enabled &&
++		    __atomic_load_n(&native_ast_caller_enabled, __ATOMIC_RELAXED)) {
++			boolean_t prior = ml_set_interrupts_enabled(FALSE);
++			native_ast_caller_sample(cpu_number(), VM_KERNEL_UNSLIDE((vm_offset_t)__builtin_return_address(0)));
++			ml_set_interrupts_enabled(prior);
++		}
++#endif
+ 		cpu_signal(processor_to_cpu_datap(processor), SIGPast, (void *)NULL, (void *)NULL);
+ 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, MACHDBG_CODE(DBG_MACH_SCHED, MACH_REMOTE_AST), processor->cpu_id, 1 /* ast */, 0, 0, 0);
+ 	}

@@ -1,0 +1,86 @@
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -361,6 +361,57 @@
+ 	return ipending;
+ }
+ 
++#if defined(XNU_PMUV3_ACTIVE) && XNU_PMUV3_ACTIVE
++#include "unixnu_pmuv3_backend.h"
++#endif
++
++#if defined(XNU_ARMCPU_IDLE_EPOCH) && XNU_ARMCPU_IDLE_EPOCH
++/* Per-CPU idle epoch; odd means inside machine_idle, UINT64_MAX poisoned.
++ * Strong CAS retries spurious exclusive failures. A mismatched transition permanently poisons
++ * this CPU for this boot. It does not establish PMU ownership or access. */
++struct unixnu_idle_slot { uint64_t epoch, bad_old, bad_seen; unsigned reason, entry; } __attribute__((aligned(128)));
++static struct unixnu_idle_slot unixnu_idle_epoch[MAX_CPUS];
++/* Call only with preemption disabled on expectedCpu. */
++uint64_t unixnu_idle_epoch_current(unsigned expectedCpu);
++bool unixnu_idle_epoch_observe(int *actual, uint64_t *epoch, unsigned *reason, uint64_t *old, uint64_t *seen, unsigned *entry);
++
++bool
++unixnu_idle_epoch_observe(int *actual, uint64_t *epoch, unsigned *reason, uint64_t *old, uint64_t *seen, unsigned *entry)
++{
++    if (!actual || !epoch || !reason || !old || !seen || !entry) return false;
++    int cpu = getCpuDatap()->cpu_number; *actual = cpu;
++    if (cpu < 0 || (unsigned)cpu >= MAX_CPUS) return false;
++    struct unixnu_idle_slot *slot = &unixnu_idle_epoch[cpu];
++    *epoch = __atomic_load_n(&slot->epoch, __ATOMIC_ACQUIRE);
++    *reason=slot->reason; *old=slot->bad_old; *seen=slot->bad_seen; *entry=slot->entry; return true;
++}
++
++uint64_t
++unixnu_idle_epoch_current(unsigned expectedCpu)
++{
++    int cpu = getCpuDatap()->cpu_number;
++    if (cpu < 0 || (unsigned)cpu >= MAX_CPUS || (unsigned)cpu != expectedCpu) return UINT64_MAX;
++    return __atomic_load_n(&unixnu_idle_epoch[cpu].epoch, __ATOMIC_ACQUIRE);
++}
++
++static void
++unixnu_idle_epoch_transition(bool entry)
++{
++    int cpu = getCpuDatap()->cpu_number;
++    if (cpu < 0 || (unsigned)cpu >= MAX_CPUS) return;
++    struct unixnu_idle_slot *slot = &unixnu_idle_epoch[cpu];
++    uint64_t *epoch = &slot->epoch;
++    uint64_t old = __atomic_load_n(epoch, __ATOMIC_RELAXED), expected=old;
++    if (old == UINT64_MAX) return;
++    unsigned reason = ((old & 1) != (entry ? 0 : 1)) ? 1 : old >= UINT64_MAX - 1 ? 2 : 0;
++    if (!reason && !__atomic_compare_exchange_n(epoch, &expected, old + 1, false, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) reason=3;
++    if (reason) {
++        slot->bad_old=old; slot->bad_seen=expected; slot->entry=entry; slot->reason=reason;
++        __atomic_store_n(epoch, UINT64_MAX, __ATOMIC_RELEASE);
++    }
++}
++#endif
++
+ void
+ machine_idle(void)
+ {
+@@ -368,6 +413,12 @@
+ 	 * Idle_load_context()
+ 	 */
+ 	assert((__builtin_arm_rsr("DAIF") & (DAIF_IRQF | DAIF_FIQF)) == (DAIF_IRQF | DAIF_FIQF));
++#if defined(XNU_ARMCPU_IDLE_EPOCH) && XNU_ARMCPU_IDLE_EPOCH
++	unixnu_idle_epoch_transition(true);
++#endif
++#if defined(XNU_PMUV3_ACTIVE) && XNU_PMUV3_ACTIVE
++	unixnu_pmuv3_idle_boundary(true);
++#endif
+ 	/* Check for, and act on, a WFE recommendation.
+ 	 * Bypasses context spill/fill for a minor perf. increment.
+ 	 * May unmask and restore IRQ+FIQ mask.
+@@ -379,6 +430,12 @@
+ 		 */
+ 		Idle_context();
+ 	}
++#if defined(XNU_ARMCPU_IDLE_EPOCH) && XNU_ARMCPU_IDLE_EPOCH
++	unixnu_idle_epoch_transition(false);
++#endif
++#if defined(XNU_PMUV3_ACTIVE) && XNU_PMUV3_ACTIVE
++	unixnu_pmuv3_idle_boundary(false);
++#endif
+ 	__builtin_arm_wsr("DAIFClr", (DAIFSC_IRQF | DAIFSC_FIQF));
+ }
+ 

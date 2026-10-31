@@ -1,0 +1,24 @@
+--- a/osfmk/arm/cpu_common.c
++++ b/osfmk/arm/cpu_common.c
+@@ -53,6 +53,9 @@
+ #include <vm/vm_map.h>
+ #include <pexpert/arm/protos.h>
+ #include <pexpert/device_tree.h>
++#if defined(XNU_IPI_SIGNAL_STATS) && XNU_IPI_SIGNAL_STATS
++extern void native_ipi_signal_record(unsigned, unsigned, unsigned, unsigned) __attribute__((weak_import));
++#endif
+ #include <sys/kdebug.h>
+ #include <arm/machine_routines.h>
+ #include <arm64/proc_reg.h>
+@@ -499,6 +502,11 @@
+ 	__builtin_arm_dsb(DSB_ISHST);
+ 
+ 	if (!(target_proc->cpu_signal & SIGPdisabled)) {
++#if defined(XNU_IPI_SIGNAL_STATS) && XNU_IPI_SIGNAL_STATS
++		if (native_ipi_signal_record) {
++			native_ipi_signal_record(current_proc->cpu_number, target_proc->cpu_number, signal, defer);
++		}
++#endif
+ 		if (defer) {
+ #if defined(HAS_IPI)
+ 			if (gFastIPI) {

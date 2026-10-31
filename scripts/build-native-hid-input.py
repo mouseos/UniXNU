@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Qualify an owned offline HID source against the unchanged target IOHIDDevice."""
-import hashlib,json,struct,subprocess,sys
+import hashlib,json,os,struct,subprocess,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1];OUT=ROOT/'build/native-hid-input';OUT.mkdir(exist_ok=True)
 sys.path.insert(0,str(ROOT/'kits/NativePrelink'))
@@ -14,8 +14,9 @@ def require(value,why):
 # instruction hash; every instruction/ABI check below still runs against it.
 V9_SHA='df5d6ebda4d0cb2faea663e6bb393e6e12fcf9f52a197ffd58e6f75274a076ab'
 HID_TEXT_SHA='7e4c5104814f2e773d5be13d092dec53ee44ba5a61a81264b229780406e86b72'
-p=ROOT/'build/native-prelink/native-owner-ufs-cpu-desktop-v9-hid-init-candidate.macho'
-if not p.exists():
+p=(ROOT.parent/'kernel/kernel.macho' if os.environ.get('UNIXNU_SOURCE_REFERENCE_PASS')=='final'
+   else ROOT/'build/native-prelink/native-owner-ufs-cpu-desktop-v9-hid-init-candidate.macho')
+if not p.exists() and os.environ.get('UNIXNU_SOURCE_REFERENCE_PASS')!='final':
     later=sorted((ROOT/'build/native-prelink').glob('native-owner-ufs-cpu-desktop-*-candidate.macho'),key=lambda f:f.stat().st_mtime)
     require(later,'No reference candidate available')
     p=later[-1]

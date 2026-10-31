@@ -1,0 +1,22 @@
+--- a/bsd/kern/kern_exit.c
++++ b/bsd/kern/kern_exit.c
+@@ -1901,5 +1901,19 @@
+ 	boot_progress_exit(proc_getpid(p),p->p_name,rv,
+ 	    p->p_exit_reason ? p->p_exit_reason->osr_namespace : 0,
+ 	    p->p_exit_reason ? p->p_exit_reason->osr_code : 0);
++#if defined(XNU_PROCESS_EXIT_DIAG) && XNU_PROCESS_EXIT_DIAG
++	/* Opt-in, exact-name filter: one record per matching process exit. */
++	char exit_diag_name[sizeof(p->p_name)] = "backboardd";
++	(void)PE_parse_boot_argn("unixnu-exit-process", exit_diag_name, sizeof(exit_diag_name));
++	exit_diag_name[sizeof(exit_diag_name) - 1] = '\0';
++	if (exit_diag_name[0] && !strncmp(exit_diag_name, p->p_name, sizeof(exit_diag_name))) {
++		const char *description = exit_reason_get_string_desc(p->p_exit_reason);
++		printf("unixnu process-exit pid=%d name=%s status=%d reason_ns=%u reason_code=%llu desc=%.160s\n",
++		    proc_getpid(p), p->p_name, rv,
++		    p->p_exit_reason ? (unsigned)p->p_exit_reason->osr_namespace : 0,
++		    p->p_exit_reason ? (unsigned long long)p->p_exit_reason->osr_code : 0ULL,
++		    description ? description : "<none>");
++	}
++#endif
+ 
+ 	if (p->p_crash_behavior != 0 || p == initproc) {
