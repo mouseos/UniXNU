@@ -1,8 +1,8 @@
 diff --git a/bsd/dev/arm/systemcalls.c b/bsd/dev/arm/systemcalls.c
-index 8a1ec42..776e95f 100644
+index 8a1ec42..2e4cd81 100644
 --- a/bsd/dev/arm/systemcalls.c
 +++ b/bsd/dev/arm/systemcalls.c
-@@ -86,6 +86,15 @@ extern int mach_trap_count;
+@@ -86,6 +86,33 @@ extern int mach_trap_count;
   *
   * Outputs:	none
   */
@@ -12,13 +12,31 @@ index 8a1ec42..776e95f 100644
 +extern bool unixnu_systrace_wants(int pid);
 +extern void unixnu_systrace_enter(unsigned int slot);
 +extern void unixnu_systrace_note(unsigned int slot, int err, uint64_t ret, const uint64_t *args,
-+    struct arm_saved_state *state, uint64_t start_abs);
++    int path_arg, struct arm_saved_state *state, uint64_t start_abs);
++
++/* Argument index of the path string of a sampled call, or -1. */
++static int
++unixnu_systrace_path_arg(unsigned int code)
++{
++	switch (code) {
++	case SYS_open: case SYS_open_nocancel: case SYS_access: case SYS_stat: case SYS_lstat:
++	case SYS_stat64: case SYS_lstat64: case SYS_readlink: case SYS_getattrlist: case SYS_execve:
++	case SYS_unlink: case SYS_mkdir: case SYS_rename: case SYS_chdir: case SYS___mac_syscall:
++	case SYS_open_dprotected_np: case SYS_guarded_open_np: case SYS_guarded_open_dprotected_np:
++		return 0;
++	case SYS_openat: case SYS_openat_nocancel: case SYS_fstatat: case SYS_fstatat64:
++	case SYS_faccessat: case SYS_posix_spawn: case SYS_getattrlistat:
++		return 1;
++	default:
++		return -1;
++	}
++}
 +#endif
 +
  void
  unix_syscall(
  	struct arm_saved_state * state,
-@@ -149,6 +158,12 @@ unix_syscall(
+@@ -149,6 +176,12 @@ unix_syscall(
  	}
  #endif
  	pid = proc_pid(proc);
@@ -31,7 +49,7 @@ index 8a1ec42..776e95f 100644
  
  #ifdef CONFIG_IOCOUNT_TRACE
  	uthread->uu_iocount = 0;
-@@ -204,6 +219,13 @@ skip_syscall:
+@@ -204,6 +237,13 @@ skip_syscall:
  	assertf(prior == NULL, "thread_set_allocation_name(\"%s\") not cleared", kern_allocation_get_name(prior));
  #endif /* DEBUG || DEVELOPMENT */
  
@@ -39,13 +57,13 @@ index 8a1ec42..776e95f 100644
 +	if (unixnu_st_start) {
 +		unixnu_systrace_note(syscode, error,
 +		    (uint64_t)(uint32_t)uthread->uu_rval[0] | ((uint64_t)(uint32_t)uthread->uu_rval[1] << 32),
-+		    uthread->uu_arg, state, unixnu_st_start);
++		    uthread->uu_arg, unixnu_systrace_path_arg(syscode), state, unixnu_st_start);
 +	}
 +#endif
  	arm_prepare_syscall_return(callp, state, uthread, error);
  
  	uthread->uu_flag &= ~UT_NOTCANCELPT;
-@@ -264,6 +286,13 @@ unix_syscall_return(int error)
+@@ -264,6 +304,13 @@ unix_syscall_return(int error)
  	/*
  	 * Get index into sysent table
  	 */
@@ -53,17 +71,17 @@ index 8a1ec42..776e95f 100644
 +	if (unixnu_systrace_wants(proc_getpid(proc))) {
 +		unixnu_systrace_note(code < nsysent ? code : SYS_invalid, error,
 +		    (uint64_t)(uint32_t)uthread->uu_rval[0] | ((uint64_t)(uint32_t)uthread->uu_rval[1] << 32),
-+		    uthread->uu_arg, regs, 0);
++		    uthread->uu_arg, unixnu_systrace_path_arg(code < nsysent ? code : SYS_invalid), regs, 0);
 +	}
 +#endif
  	arm_prepare_syscall_return(callp, regs, uthread, error);
  
  	uthread->uu_flag &= ~UT_NOTCANCELPT;
 diff --git a/osfmk/arm64/bsd_arm64.c b/osfmk/arm64/bsd_arm64.c
-index 6cb830d..01d1e9d 100644
+index 6cb830d..c9a0efe 100644
 --- a/osfmk/arm64/bsd_arm64.c
 +++ b/osfmk/arm64/bsd_arm64.c
-@@ -173,6 +173,199 @@ extern int debug_syscall_rejection_mode;
+@@ -173,6 +173,210 @@ extern int debug_syscall_rejection_mode;
  extern bool debug_syscall_rejection_handle(int syscall_mach_trap_number);
  #endif /* CONFIG_DEBUG_SYSCALL_REJECTION */
  
@@ -73,7 +91,7 @@ index 6cb830d..01d1e9d 100644
 +extern bool unixnu_systrace_wants(int pid);
 +extern void unixnu_systrace_enter(unsigned int slot);
 +extern void unixnu_systrace_note(unsigned int slot, int err, uint64_t ret, const uint64_t *args,
-+    struct arm_saved_state *state, uint64_t start_abs);
++    int path_arg, struct arm_saved_state *state, uint64_t start_abs);
 +#endif
 +#if defined(XNU_SYSCALL_TRACE) && XNU_SYSCALL_TRACE
 +#include <kern/startup.h>
@@ -109,6 +127,7 @@ index 6cb830d..01d1e9d 100644
 +	uint64_t pc;
 +	uint64_t lr;
 +	uint64_t tid;
++	char path[64];
 +};
 +
 +static struct unixnu_st_slot unixnu_st[UNIXNU_ST_SLOTS];
@@ -181,11 +200,12 @@ index 6cb830d..01d1e9d 100644
 +		uint64_t dur_ns;
 +		absolutetime_to_nanoseconds(s->dur_abs, &dur_ns);
 +		printf("unixnu systrace %s=%u in=%u n=%u err=%u last_err=%d cont=%u avg_ns=%llu ret=0x%llx "
-+		    "a=0x%llx,0x%llx,0x%llx,0x%llx tid=%llu pc=0x%llx lr=0x%llx\n",
++		    "a=0x%llx,0x%llx,0x%llx,0x%llx tid=%llu pc=0x%llx lr=0x%llx%s%.63s\n",
 +		    best < UNIXNU_SYSTRACE_BSD_SLOTS ? "bsd" : "mach",
 +		    best < UNIXNU_SYSTRACE_BSD_SLOTS ? best : best - UNIXNU_SYSTRACE_BSD_SLOTS,
 +		    os_atomic_load(&s->enter, relaxed), returned, s->errors, (int)s->last_err, s->cont, timed ? dur_ns / timed : 0ULL, s->ret,
-+		    s->arg[0], s->arg[1], s->arg[2], s->arg[3], s->tid, s->pc, s->lr);
++		    s->arg[0], s->arg[1], s->arg[2], s->arg[3], s->tid, s->pc, s->lr,
++		    s->path[0] ? " path=" : "", s->path);
 +	}
 +	for (unsigned int i = 0; i < UNIXNU_ST_SLOTS; i++) {
 +		if (unixnu_systrace_key(&unixnu_st[i])) {
@@ -196,7 +216,7 @@ index 6cb830d..01d1e9d 100644
 +
 +void
 +unixnu_systrace_note(unsigned int slot, int err, uint64_t ret, const uint64_t *args,
-+    struct arm_saved_state *state, uint64_t start_abs)
++    int path_arg, struct arm_saved_state *state, uint64_t start_abs)
 +{
 +	if (slot >= UNIXNU_ST_SLOTS) {
 +		return;
@@ -222,6 +242,15 @@ index 6cb830d..01d1e9d 100644
 +		s->pc = get_saved_state_pc(state);
 +		s->lr = get_saved_state_lr(state);
 +		s->tid = thread_tid(current_thread());
++		/* Path argument of the sampled call (user memory, still mapped at return). */
++		char path[sizeof(s->path)] = "";
++		vm_size_t copied = 0;
++		if (path_arg >= 0 && path_arg < 4 && args != NULL && args[path_arg] != 0 &&
++		    copyinstr((user_addr_t)args[path_arg], path, sizeof(path), &copied) != 0) {
++			path[0] = '\0';
++		}
++		path[sizeof(path) - 1] = '\0';
++		memcpy(s->path, path, sizeof(path));
 +	}
 +
 +	uint64_t deadline = os_atomic_load(&unixnu_st_deadline, relaxed);
@@ -263,7 +292,7 @@ index 6cb830d..01d1e9d 100644
  void
  mach_syscall(struct arm_saved_state *state)
  {
-@@ -192,6 +385,9 @@ mach_syscall(struct arm_saved_state *state)
+@@ -192,6 +396,9 @@ mach_syscall(struct arm_saved_state *state)
  	int call_number = get_saved_state_svc_number(state);
  	int64_t exc_code;
  	int argc;
@@ -273,7 +302,7 @@ index 6cb830d..01d1e9d 100644
  
  	struct uthread *ut = get_bsdthread_info(current_thread());
  	uthread_reset_proc_refcount(ut);
-@@ -212,6 +408,12 @@ mach_syscall(struct arm_saved_state *state)
+@@ -212,6 +419,12 @@ mach_syscall(struct arm_saved_state *state)
  	kprintf("mach_syscall(0x%08x) code=%d\n", state, call_number);
  #endif
  
@@ -286,7 +315,7 @@ index 6cb830d..01d1e9d 100644
  	mach_call = (mach_call_t)mach_trap_table[call_number].mach_trap_function;
  
  	if (mach_call == (mach_call_t)kern_invalid) {
-@@ -289,6 +491,14 @@ skip_machcall:
+@@ -289,6 +502,14 @@ skip_machcall:
  	    MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_END,
  	    retval, 0, 0, 0, 0);
  
@@ -295,14 +324,14 @@ index 6cb830d..01d1e9d 100644
 +		uint64_t unixnu_st_args[4] = { args.arg1, args.arg2, args.arg3, args.arg4 };
 +		unixnu_systrace_note(UNIXNU_SYSTRACE_BSD_SLOTS + (unsigned int)call_number,
 +		    mach_trap_table[call_number].mach_trap_returns_port ? 0 : (int)retval,
-+		    (uint64_t)retval, unixnu_st_args, state, unixnu_st_start);
++		    (uint64_t)retval, unixnu_st_args, -1, state, unixnu_st_start);
 +	}
 +#endif
  	arm_set_mach_syscall_ret(state, retval);
  
  	throttle_lowpri_io(1);
 diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
-index ae94c7e..2182d1f 100644
+index ae94c7e..ef4a9dc 100644
 --- a/osfmk/arm64/sleh.c
 +++ b/osfmk/arm64/sleh.c
 @@ -2277,6 +2277,18 @@ mach_syscall_trace_exit(unsigned int retval,
@@ -315,7 +344,7 @@ index ae94c7e..2182d1f 100644
 +extern bool unixnu_systrace_wants(int pid);
 +extern void unixnu_systrace_enter(unsigned int slot);
 +extern void unixnu_systrace_note(unsigned int slot, int err, uint64_t ret, const uint64_t *args,
-+    struct arm_saved_state *state, uint64_t start_abs);
++    int path_arg, struct arm_saved_state *state, uint64_t start_abs);
 +#endif
 +#if defined(XNU_SYSCALL_TRACE) && XNU_SYSCALL_TRACE
 +#include <kern/syscall_sw.h>
@@ -334,7 +363,7 @@ index ae94c7e..2182d1f 100644
 +		if (number > 0 && number < MACH_TRAP_TABLE_COUNT) {
 +			unixnu_systrace_note(UNIXNU_SYSTRACE_BSD_SLOTS + (unsigned int)number,
 +			    mach_trap_table[number].mach_trap_returns_port ? 0 : (int)error,
-+			    (uint64_t)error, saved_state64(state)->x, state, 0);
++			    (uint64_t)error, saved_state64(state)->x, -1, state, 0);
 +		}
 +	}
 +#endif

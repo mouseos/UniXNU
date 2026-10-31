@@ -236,6 +236,8 @@ unixnu systrace pid=1 t_ms=95012 win_ms=1000 total=48211 numbers=7 slide=0x1c3c0
 unixnu systrace bsd=374 in=24100 n=24100 err=24100 last_err=35 cont=0 avg_ns=9400 ret=0x0 a=0x3,0x16f1e2b10,0x1,0x0 tid=2597 pc=0x1e4f56794 lr=0x1b090c308
 ```
 
+For calls that take a path (the open, stat, access and getattrlist families, `posix_spawn`, `execve` and `__mac_syscall`), the sample adds `path=` with the first 63 bytes of the string, copied from the caller at return.
+
 `in` counts entries and `n` counts returns. A call that never returns normally, such as a workqueue park, only counts in `in`. `cont` counts returns through a continuation, which have no duration. `err` counts failed returns (errno for BSD calls, the kern_return for Mach traps that do not return a port name). The sample (`ret`, `a`, `tid`, `pc`, `lr`) is the latest failing call of the window, or the latest call when none failed. `pc` is the address after the `svc` and `lr` the caller of the stub. Subtract `slide` from shared cache addresses, and `main` from main executable addresses, to look them up in the binaries.
 
 A thread call prints the rows, so the profiled process does not wait for the serial port. Counters are updated without locks; a row can lose a count that races the window reset.

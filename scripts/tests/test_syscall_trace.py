@@ -47,6 +47,10 @@ typedef void *thread_call_param_t;
 typedef void (*thread_call_func_t)(thread_call_param_t, thread_call_param_t);
 typedef struct { thread_call_func_t f; int pending; } *thread_call_t;
 typedef struct { uint64_t mach_header_vm_address; } *task_t;
+typedef uint64_t user_addr_t;
+typedef unsigned long vm_size_t;
+static int copyinstr(user_addr_t a, char *b, vm_size_t n, vm_size_t *done)
+{ if (a == 0xbad) return 14; snprintf(b, n, "%s", (const char *)(uintptr_t)a); *done = strlen(b) + 1; return 0; }
 typedef struct { uint32_t sr_slide; } *vm_shared_region_t;
 static uint64_t clock_now = 1000;
 static uint64_t mach_absolute_time(void) { return clock_now; }
@@ -78,36 +82,45 @@ int main(void)
 	assert(!unixnu_systrace_wants(1));
 	unixnu_st_pid = 1;
 	assert(unixnu_systrace_wants(1) && !unixnu_systrace_wants(2));
-	unixnu_systrace_note(20, 0, 0, a_ok, &st, 0);
+	unixnu_systrace_note(20, 0, 0, a_ok, -1, &st, 0);
 	assert(lines == 1 && strstr(out[0], "enabled pid=1") && call.pending == 0);
-	for (int i = 0; i < 3; i++) { unixnu_systrace_enter(374); clock_now += 100; unixnu_systrace_note(374, 35, 0, a_err, &st, clock_now - 100); }
+	for (int i = 0; i < 3; i++) { unixnu_systrace_enter(374); clock_now += 100; unixnu_systrace_note(374, 35, 0, a_err, -1, &st, clock_now - 100); }
 	tid = 8;
-	unixnu_systrace_enter(374); unixnu_systrace_note(374, 0, 5, a_ok, &st, clock_now);
-	for (int i = 0; i < 5; i++) { unixnu_systrace_enter(600 + 31); unixnu_systrace_note(600 + 31, 0, 0, a_ok, &st, 0); }
+	unixnu_systrace_enter(374); unixnu_systrace_note(374, 0, 5, a_ok, -1, &st, clock_now);
+	for (int i = 0; i < 5; i++) { unixnu_systrace_enter(600 + 31); unixnu_systrace_note(600 + 31, 0, 0, a_ok, -1, &st, 0); }
 	for (int i = 0; i < 10; i++) unixnu_systrace_enter(368);
+	uint64_t a_path[4] = { (uint64_t)(uintptr_t)"/System/Library/LaunchDaemons/x.plist", 0x1000000, 0, 0 };
+	uint64_t a_bad[4] = { 0xbad, 0, 0, 0 };
+	unixnu_systrace_enter(398); unixnu_systrace_note(398, 2, 0, a_path, 0, &st, clock_now);
+	unixnu_systrace_enter(398); unixnu_systrace_note(398, 0, 3, a_bad, 0, &st, clock_now);
 	assert(call.pending == 0);
 	clock_now = 1000 + 1000 * NSEC_PER_MSEC;
-	unixnu_systrace_note(20, 0, 0, a_ok, &st, clock_now);
-	unixnu_systrace_note(20, 0, 0, a_ok, &st, clock_now);
+	unixnu_systrace_note(20, 0, 0, a_ok, -1, &st, clock_now);
+	unixnu_systrace_note(20, 0, 0, a_ok, -1, &st, clock_now);
 	run_call();
 	assert(strstr(out[0], "pid=1 ") && strstr(out[0], "slide=0x1c3c000") && strstr(out[0], "main=0x100b88000"));
-	assert(strstr(out[0], "total=22 numbers=4"));
+	assert(strstr(out[0], "total=24 numbers=5"));
 	assert(strstr(out[1], "bsd=368 in=10 n=0 err=0"));
 	assert(strstr(out[2], "mach=31 in=5 n=5 err=0 last_err=0 cont=5 avg_ns=0"));
 	assert(strstr(out[3], "bsd=374 in=4 n=4 err=3 last_err=35 cont=0 avg_ns=75 ret=0x0 a=0x3,0x16f1e2b10,0x1,0x0 tid=7 pc=0x1e4f56794 lr=0x1b090c308"));
-	assert(strstr(out[4], "bsd=20 in=0 n=3"));
-	assert(lines == 5);
-	unixnu_systrace_note(20, 0, 0, a_ok, &st, clock_now);
+	assert(strstr(out[4], "bsd=20 in=0 n=3") || strstr(out[5], "bsd=20 in=0 n=3"));
+	int found = 0;
+	for (int i = 1; i < lines; i++)
+		if (strstr(out[i], "bsd=398 in=2 n=2 err=1 last_err=2") && strstr(out[i], " path=/System/Library/LaunchDaemons/x.plist")) found++;
+	assert(found == 1);
+	assert(!strstr(out[3], "path="));
+	assert(lines == 6);
+	unixnu_systrace_note(20, 0, 0, a_ok, -1, &st, clock_now);
 	assert(call.pending == 0);
 	clock_now += 1000 * NSEC_PER_MSEC;
-	unixnu_systrace_note(20, 0, 0, a_ok, &st, clock_now);
+	unixnu_systrace_note(20, 0, 0, a_ok, -1, &st, clock_now);
 	run_call();
 	assert(strstr(out[0], "total=2 numbers=1") && lines == 2);
 	unixnu_st_max_windows = 2;
 	clock_now += 1000 * NSEC_PER_MSEC;
-	unixnu_systrace_note(20, 0, 0, a_ok, &st, clock_now);
+	unixnu_systrace_note(20, 0, 0, a_ok, -1, &st, clock_now);
 	clock_now += 5000 * NSEC_PER_MSEC;
-	unixnu_systrace_note(20, 0, 0, a_ok, &st, clock_now);
+	unixnu_systrace_note(20, 0, 0, a_ok, -1, &st, clock_now);
 	assert(call.pending == 0);
 	return 0;
 }
