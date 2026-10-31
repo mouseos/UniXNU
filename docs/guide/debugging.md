@@ -225,22 +225,22 @@ unixnu-systrace-pid=1
 | Boot argument | Default | Meaning |
 | --- | --- | --- |
 | `unixnu-systrace-pid` | -1 (off) | Process ID to profile |
-| `unixnu-systrace-ms` | 1000 | Window length in milliseconds |
-| `unixnu-systrace-lines` | 10 | Numbers printed per window, busiest first |
+| `unixnu-systrace-ms` | 1000 | Window length in milliseconds (at least 10) |
+| `unixnu-systrace-lines` | 8 | Numbers printed per window, busiest first |
 | `unixnu-systrace-max` | 1800 | Windows printed before the profile stops |
 
 Each window prints a header and one row per number:
 
 ```
 unixnu systrace pid=1 t_ms=95012 win_ms=1000 total=48211 numbers=7 slide=0x1c3c000 main=0x100b88000 w=60
-unixnu systrace bsd=374 in=24100 n=24100 err=24100 last_err=35 cont=0 avg_ns=9400 ret=0x0 a=0x3,0x16f1e2b10,0x1,0x0 tid=2597 pc=0x1e4f56794 lr=0x1b090c308
+unixnu systrace bsd=374 in=24100 n=24100 err=24100 last_err=35 cont=0 rs=0 avg_ns=9400 ret=0x0 a=0x3,0x16f1e2b10,0x1,0x0 tid=2597 pc=0x1e4f56794 lr=0x1b090c308
 ```
 
-For calls that take a path (the open, stat, access and getattrlist families, `posix_spawn`, `execve` and `__mac_syscall`), the sample adds `path=` with the first 63 bytes of the string, copied from the caller at return.
+For calls that take a path (the open, stat, statfs, access and getattrlist families, `posix_spawn`, `execve` and a few others), the sample adds `path=` with the first 63 bytes of the string, copied from the caller at return.
 
-`in` counts entries and `n` counts returns. A call that never returns normally, such as a workqueue park, only counts in `in`. `cont` counts returns through a continuation, which have no duration. `err` counts failed returns (errno for BSD calls, the kern_return for Mach traps that do not return a port name). The sample (`ret`, `a`, `tid`, `pc`, `lr`) is the latest failing call of the window, or the latest call when none failed. `pc` is the address after the `svc` and `lr` the caller of the stub. Subtract `slide` from shared cache addresses, and `main` from main executable addresses, to look them up in the binaries.
+`in` counts entries and `n` counts returns. A call that never returns normally, such as a workqueue park, only counts in `in`. `cont` counts returns through a continuation, which have no duration. `err` counts failed returns (errno for BSD calls, the kern_return for Mach traps that do not return a port name). `rs` counts the kernel-internal results ERESTART and EJUSTRETURN (restart, signal return, a successful exec), which are not failures. `avg_ns` is wall time and includes blocking. The sample (`ret`, `a`, `tid`, `pc`, `lr`) is the latest failing call of the window, or the latest call when none failed. `pc` is the address after the `svc` and `lr` the caller of the stub. Subtract `slide` from shared cache addresses, and `main` from main executable addresses, to look them up in the binaries. `slide=none:` means the process had no shared region when the profile started. The first window also prints an `enabled` line with the settings.
 
-A thread call prints the rows, so the profiled process does not wait for the serial port. Counters are updated without locks; a row can lose a count that races the window reset.
+A thread call prints the rows, so the profiled process does not wait for the serial port. At the defaults the rows take about 2 KB/s, a fifth of a 115200 baud console. Counters are updated without locks; a row can lose a count that races the window reset. `mach_absolute_time`, `mach_continuous_time` and other traps that the exception handler serves directly are not counted. Without the boot argument, a build with the flag only adds one load and compare per call.
 
 ## Taking photographs
 

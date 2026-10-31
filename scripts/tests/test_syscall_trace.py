@@ -12,7 +12,11 @@ core_file = next(h for h in hunks if h.startswith('a/osfmk/arm64/bsd_arm64.c'))
 added = [x[1:] for x in core_file.splitlines() if x.startswith('+') and not x.startswith('+++')]
 start = added.index('#if defined(XNU_SYSCALL_TRACE) && XNU_SYSCALL_TRACE')
 end = added.index('#endif /* XNU_SYSCALL_TRACE */')
-core = '\n'.join(x for x in added[start:end + 1] if not x.startswith('#include'))
+header_hunk = next(h for h in hunks if h.startswith('a/osfmk/arm64/unixnu_systrace.h'))
+header = [x[1:] for x in header_hunk.splitlines() if x.startswith('+') and not x.startswith('+++')]
+hstart = header.index('#if defined(XNU_SYSCALL_TRACE) && XNU_SYSCALL_TRACE')
+hend = header.index('#endif /* XNU_SYSCALL_TRACE */')
+core = '\n'.join(x for x in header[hstart + 1:hend] + added[start + 1:end] if not x.startswith('#include'))
 for name in ('bsd/dev/arm/systemcalls.c', 'osfmk/arm64/sleh.c', 'osfmk/arm64/bsd_arm64.c'):
     hunk = next(h for h in hunks if h.startswith('a/' + name))
     lines = [x[1:] for x in hunk.splitlines() if x.startswith('+') and not x.startswith('+++')]
@@ -30,6 +34,8 @@ src = r'''#include <stdio.h>
 #define __improbable(x) (x)
 #define __unused __attribute__((unused))
 #define relaxed __ATOMIC_RELAXED
+#define release __ATOMIC_RELEASE
+#define acquire __ATOMIC_ACQUIRE
 #define os_atomic_inc(p, o) __atomic_add_fetch((p), 1, o)
 #define os_atomic_add(p, v, o) __atomic_add_fetch((p), (v), o)
 #define os_atomic_load(p, o) __atomic_load_n((p), o)
@@ -38,6 +44,10 @@ src = r'''#include <stdio.h>
 #define os_atomic_cmpxchg(p, e, n, o) ({ __typeof__(*(p)) _e = (e); __atomic_compare_exchange_n((p), &_e, (n), 0, o, o); })
 #define TUNABLE(t, v, k, d) t v = d
 #define MACH_TRAP_TABLE_COUNT 128
+#define ERESTART (-1)
+#define EJUSTRETURN (-2)
+#define ENAMETOOLONG 63
+#define THREAD_CALL_PRIORITY_KERNEL 0
 #define NSEC_PER_MSEC 1000000ULL
 #define THREAD_CALL_PRIORITY_LOW 0
 #define THREAD_CALL_OPTIONS_ONCE 0
@@ -50,7 +60,8 @@ typedef struct { uint64_t mach_header_vm_address; } *task_t;
 typedef uint64_t user_addr_t;
 typedef unsigned long vm_size_t;
 static int copyinstr(user_addr_t a, char *b, vm_size_t n, vm_size_t *done)
-{ if (a == 0xbad) return 14; snprintf(b, n, "%s", (const char *)(uintptr_t)a); *done = strlen(b) + 1; return 0; }
+{ if (a == 0xbad) return 14; const char *src = (const char *)(uintptr_t)a; snprintf(b, n, "%s", src);
+  *done = strlen(b) + 1; return strlen(src) >= n ? ENAMETOOLONG : 0; }
 typedef struct { uint32_t sr_slide; } *vm_shared_region_t;
 static uint64_t clock_now = 1000;
 static uint64_t mach_absolute_time(void) { return clock_now; }
@@ -83,7 +94,7 @@ int main(void)
 	unixnu_st_pid = 1;
 	assert(unixnu_systrace_wants(1) && !unixnu_systrace_wants(2));
 	unixnu_systrace_note(20, 0, 0, a_ok, -1, &st, 0);
-	assert(lines == 1 && strstr(out[0], "enabled pid=1") && call.pending == 0);
+	assert(lines == 0 && call.pending == 0);
 	for (int i = 0; i < 3; i++) { unixnu_systrace_enter(374); clock_now += 100; unixnu_systrace_note(374, 35, 0, a_err, -1, &st, clock_now - 100); }
 	tid = 8;
 	unixnu_systrace_enter(374); unixnu_systrace_note(374, 0, 5, a_ok, -1, &st, clock_now);
@@ -93,29 +104,46 @@ int main(void)
 	uint64_t a_bad[4] = { 0xbad, 0, 0, 0 };
 	unixnu_systrace_enter(398); unixnu_systrace_note(398, 2, 0, a_path, 0, &st, clock_now);
 	unixnu_systrace_enter(398); unixnu_systrace_note(398, 0, 3, a_bad, 0, &st, clock_now);
+	static char longpath[200];
+	memset(longpath, 'p', sizeof(longpath) - 1); longpath[0] = '/';
+	uint64_t a_long[4] = { (uint64_t)(uintptr_t)longpath, 0, 0, 0 };
+	unixnu_systrace_enter(338); unixnu_systrace_note(338, 0, 0, a_long, 0, &st, clock_now);
+	unixnu_systrace_enter(59); unixnu_systrace_note(59, EJUSTRETURN, 0, a_ok, -1, &st, clock_now);
+	unixnu_systrace_enter(59); unixnu_systrace_note(59, ERESTART, 0, a_ok, -1, &st, clock_now);
 	assert(call.pending == 0);
 	clock_now = 1000 + 1000 * NSEC_PER_MSEC;
 	unixnu_systrace_note(20, 0, 0, a_ok, -1, &st, clock_now);
 	unixnu_systrace_note(20, 0, 0, a_ok, -1, &st, clock_now);
+	unixnu_st_lines = 10;
 	run_call();
+	assert(strstr(out[0], "enabled pid=1"));
+	for (int i = 0; i < lines - 1; i++) memcpy(out[i], out[i + 1], sizeof(out[0]));
+	lines--;
 	assert(strstr(out[0], "pid=1 ") && strstr(out[0], "slide=0x1c3c000") && strstr(out[0], "main=0x100b88000"));
-	assert(strstr(out[0], "total=24 numbers=5"));
+	assert(strstr(out[0], "total=27 numbers=7"));
 	assert(strstr(out[1], "bsd=368 in=10 n=0 err=0"));
-	assert(strstr(out[2], "mach=31 in=5 n=5 err=0 last_err=0 cont=5 avg_ns=0"));
-	assert(strstr(out[3], "bsd=374 in=4 n=4 err=3 last_err=35 cont=0 avg_ns=75 ret=0x0 a=0x3,0x16f1e2b10,0x1,0x0 tid=7 pc=0x1e4f56794 lr=0x1b090c308"));
+	assert(strstr(out[2], "mach=31 in=5 n=5 err=0 last_err=0 cont=5 rs=0 avg_ns=0"));
+	assert(strstr(out[3], "bsd=374 in=4 n=4 err=3 last_err=35 cont=0 rs=0 avg_ns=75 ret=0x0 a=0x3,0x16f1e2b10,0x1,0x0 tid=7 pc=0x1e4f56794 lr=0x1b090c308"));
 	assert(strstr(out[4], "bsd=20 in=0 n=3") || strstr(out[5], "bsd=20 in=0 n=3"));
 	int found = 0;
 	for (int i = 1; i < lines; i++)
 		if (strstr(out[i], "bsd=398 in=2 n=2 err=1 last_err=2") && strstr(out[i], " path=/System/Library/LaunchDaemons/x.plist")) found++;
 	assert(found == 1);
 	assert(!strstr(out[3], "path="));
-	assert(lines == 6);
+	int restarts = 0, longs = 0;
+	for (int i = 1; i < lines; i++) {
+		if (strstr(out[i], "bsd=59 in=2 n=2 err=0 last_err=0 cont=0 rs=2")) restarts++;
+		char *p = strstr(out[i], "bsd=338 ");
+		if (p && strstr(p, " path=/ppp") && strlen(strstr(p, " path=")) == strlen(" path=") + 63 + 1) longs++;
+	}
+	assert(restarts == 1 && longs == 1);
+	assert(lines == 8);
 	unixnu_systrace_note(20, 0, 0, a_ok, -1, &st, clock_now);
 	assert(call.pending == 0);
 	clock_now += 1000 * NSEC_PER_MSEC;
 	unixnu_systrace_note(20, 0, 0, a_ok, -1, &st, clock_now);
 	run_call();
-	assert(strstr(out[0], "total=2 numbers=1") && lines == 2);
+	assert(strstr(out[0], "total=2 numbers=1") && lines == 2 && !strstr(out[0], "enabled"));
 	unixnu_st_max_windows = 2;
 	clock_now += 1000 * NSEC_PER_MSEC;
 	unixnu_systrace_note(20, 0, 0, a_ok, -1, &st, clock_now);
@@ -135,5 +163,6 @@ with tempfile.TemporaryDirectory() as d:
 script = (root / 'scripts/build-xnu-4k-baseline.sh').read_text()
 assert 'XNU_SYSCALL_TRACE:-0' in script and 'bsd/DEVELOPMENT/systemcalls.o' in script
 assert '-DXNU_SYSCALL_TRACE=$SYSCALL_TRACE' in script
-print('PASS: syscall profile counts, failing sample, entry-only calls, order, reset, window limit, opt-in flag')
+assert 'THREAD_CALL_PRIORITY_KERNEL' in core and 'unixnu_systrace_on() && unixnu_systrace_wants' in patch
+print('PASS: syscall profile counts, failing sample, restart codes, long paths, entry-only calls, order, reset, window limit, opt-in flag')
 
