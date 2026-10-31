@@ -60,7 +60,7 @@ int main(void) {
   assert(lines == 6); assert(strstr(last, "bt4=0x18f00aaaa cache image=0x0"));
   lines = 0; cur = 0; run(&p, 11, 0, (void *)1, &ut); assert(lines == 0); cur = &p;  /* not the exiting process */
   struct proc q = {"Preferences"}; lines = 0; cur = &q; bootarg = "all"; run(&q, 11, 0, (void *)1, &ut); assert(lines == 6); cur = &p; bootarg = "iconservicesagent";  /* ucp=all */
-  regs.pc = 0x104012345ULL; regs.fp = 0x16f000301ULL; /* misaligned frame pointer: registers only */
+  lines = 0; regs.pc = 0x104012345ULL; regs.fp = 0x16f000301ULL; /* misaligned frame pointer: registers only */
   run(&p, 11, 0, (void *)1, &ut); assert(lines == 3); assert(strstr(last, "lr1=0x18f001234 cache image=0x0"));
   /* 3 crashes so far */
   for (int i = 0; i < 40; i++) { lines = 0; run(&p, 11, 0, (void *)1, &ut); }
