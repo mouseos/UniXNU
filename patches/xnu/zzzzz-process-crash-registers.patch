@@ -1,16 +1,20 @@
 --- a/bsd/kern/kern_exit.c
 +++ b/bsd/kern/kern_exit.c
-@@ -75,6 +75,9 @@
+@@ -75,6 +75,13 @@
  
  #include <machine/reg.h>
  #include <machine/psl.h>
++#if defined(XNU_PROCESS_EXIT_DIAG) && XNU_PROCESS_EXIT_DIAG && defined(__arm64__)
 +#include <vm/vm_shared_region.h>
 +#include <mach/shared_region.h>
 +#include <mach/thread_status.h>
++/* The crash-register diagnostic in proc_prepareexit (ucp=<name>). */
++extern struct arm_saved_state *find_user_regs(thread_t);
++#endif
  #include <stdatomic.h>
  
  #include <sys/param.h>
-@@ -1958,6 +1961,72 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
+@@ -1958,6 +1965,71 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
  		    ((int)ut->uu_code & 0xfffff);
  		subcode = ut->uu_subcode;
  		etype = ut->uu_exception;
@@ -22,7 +26,6 @@
 +		 * executable). At most 32 crashes per boot; only this exiting thread's own memory is read, with copyin.
 +		 */
 +		{
-+			extern struct arm_saved_state *find_user_regs(thread_t);
 +			static uint32_t crash_diag_count;
 +			char crash_diag_name[sizeof(p->p_name)] = "";
 +			(void)PE_parse_boot_argn("ucp", crash_diag_name, sizeof(crash_diag_name));

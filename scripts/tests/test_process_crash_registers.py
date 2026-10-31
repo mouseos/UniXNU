@@ -7,7 +7,9 @@ import subprocess, tempfile
 root = Path(__file__).resolve().parents[2]
 patch = (root / 'patches/xnu/zzzzz-process-crash-registers.patch').read_text()
 added = [x[1:] for x in patch.splitlines() if x.startswith('+') and not x.startswith('+++')]
-start = next(i for i, x in enumerate(added) if x.startswith('#if defined(XNU_PROCESS_EXIT_DIAG)'))
+# The last opt-in block is the one in proc_prepareexit; the first one holds the includes and the file-scope declaration.
+start = [i for i, x in enumerate(added) if x.startswith('#if defined(XNU_PROCESS_EXIT_DIAG)')][-1]
+assert 'extern struct arm_saved_state *find_user_regs(thread_t);' in added, 'file-scope declaration'
 block = '\n'.join(added[start:])
 assert block.rstrip().endswith('#endif') and 'ucp' in block
 src = r'''#include <stdio.h>
