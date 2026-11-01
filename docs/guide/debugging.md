@@ -225,6 +225,7 @@ unixnu-systrace-pid=1
 | Boot argument | Default | Meaning |
 | --- | --- | --- |
 | `unixnu-systrace-pid` | -1 (off) | Process ID to profile |
+| `unixnu-systrace-name` | empty (off) | Process name to profile when the pid is not known; the first process with this name is followed by its pid |
 | `unixnu-systrace-ms` | 1000 | Window length in milliseconds (at least 10) |
 | `unixnu-systrace-lines` | 8 | Numbers printed per window, busiest first |
 | `unixnu-systrace-max` | 1800 | Windows printed before the profile stops |
