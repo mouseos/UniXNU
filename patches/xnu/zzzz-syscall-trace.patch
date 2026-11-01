@@ -87,10 +87,10 @@ index e015003..c3a4058 100644
  # These headers will be available with #include <arm64/header_file.h>
  EXPORT_MD_DIR = arm64
 diff --git a/osfmk/arm64/bsd_arm64.c b/osfmk/arm64/bsd_arm64.c
-index 6cb830d..69461bf 100644
+index 6cb830d..bbab896 100644
 --- a/osfmk/arm64/bsd_arm64.c
 +++ b/osfmk/arm64/bsd_arm64.c
-@@ -173,6 +173,219 @@ extern int debug_syscall_rejection_mode;
+@@ -173,6 +173,254 @@ extern int debug_syscall_rejection_mode;
  extern bool debug_syscall_rejection_handle(int syscall_mach_trap_number);
  #endif /* CONFIG_DEBUG_SYSCALL_REJECTION */
  
@@ -134,14 +134,17 @@ index 6cb830d..69461bf 100644
 +	uint64_t lr;
 +	uint64_t tid;
 +	char path[64];
++	uint32_t bt_state;
++	uint32_t bt_n;
++	uint64_t bt[8];
 +};
 +
 +static struct unixnu_st_slot unixnu_st[UNIXNU_ST_SLOTS];
 +static uint64_t unixnu_st_deadline;
 +static uint64_t unixnu_st_window_start;
 +static uint32_t unixnu_st_windows;
-+static uint32_t unixnu_st_slide;
-+static bool unixnu_st_have_slide;
++static uint64_t unixnu_st_cache;
++static bool unixnu_st_have_cache;
 +static uint64_t unixnu_st_main;
 +static thread_call_t unixnu_st_call;
 +
@@ -188,9 +191,9 @@ index 6cb830d..69461bf 100644
 +		printf("unixnu systrace enabled pid=%d ms=%u lines=%u max=%u\n", unixnu_st_pid,
 +		    unixnu_st_period_ms, unixnu_st_lines, unixnu_st_max_windows);
 +	}
-+	printf("unixnu systrace pid=%d t_ms=%llu win_ms=%llu total=%u numbers=%u slide=%s0x%x main=0x%llx w=%u\n",
++	printf("unixnu systrace pid=%d t_ms=%llu win_ms=%llu total=%u numbers=%u cache=%s0x%llx main=0x%llx w=%u\n",
 +	    unixnu_st_pid, now_ns / NSEC_PER_MSEC, win_ns / NSEC_PER_MSEC, total, active,
-+	    unixnu_st_have_slide ? "" : "none:", unixnu_st_slide, unixnu_st_main,
++	    os_atomic_load(&unixnu_st_have_cache, acquire) ? "" : "none:", unixnu_st_cache, unixnu_st_main,
 +	    os_atomic_load(&unixnu_st_windows, relaxed));
 +	for (uint32_t line = 0; line < unixnu_st_lines; line++) {
 +		unsigned int best = UNIXNU_ST_SLOTS;
@@ -211,13 +214,20 @@ index 6cb830d..69461bf 100644
 +		uint32_t timed = returned > s->cont ? returned - s->cont : 0;
 +		uint64_t dur_ns;
 +		absolutetime_to_nanoseconds(s->dur_abs, &dur_ns);
++		char bt[8 * 20 + 8];
++		int used = 0;
++		uint32_t frames = os_atomic_load(&s->bt_state, acquire) == 2 ? s->bt_n : 0;
++		bt[0] = 0;
++		for (uint32_t f = 0; f < frames && f < 8; f++) {
++			used += snprintf(bt + used, sizeof(bt) - (size_t)used, "%s0x%llx", f ? "," : " bt=", s->bt[f]);
++		}
 +		printf("unixnu systrace %s=%u in=%u n=%u err=%u last_err=%d cont=%u rs=%u avg_ns=%llu ret=0x%llx "
-+		    "a=0x%llx,0x%llx,0x%llx,0x%llx tid=%llu pc=0x%llx lr=0x%llx%s%.63s\n",
++		    "a=0x%llx,0x%llx,0x%llx,0x%llx tid=%llu pc=0x%llx lr=0x%llx%s%.63s%s\n",
 +		    best < UNIXNU_SYSTRACE_BSD_SLOTS ? "bsd" : "mach",
 +		    best < UNIXNU_SYSTRACE_BSD_SLOTS ? best : best - UNIXNU_SYSTRACE_BSD_SLOTS,
 +		    os_atomic_load(&s->enter, relaxed), returned, s->errors, (int)s->last_err, s->cont, s->restart, timed ? dur_ns / timed : 0ULL, s->ret,
 +		    s->arg[0], s->arg[1], s->arg[2], s->arg[3], s->tid, s->pc, s->lr,
-+		    s->path[0] ? " path=" : "", s->path);
++		    s->path[0] ? " path=" : "", s->path, bt);
 +	}
 +	for (unsigned int i = 0; i < UNIXNU_ST_SLOTS; i++) {
 +		if (unixnu_systrace_key(&unixnu_st[i])) {
@@ -271,6 +281,25 @@ index 6cb830d..69461bf 100644
 +		path[sizeof(path) - 1] = '\0';
 +		memcpy(s->path, path, sizeof(path));
 +	}
++	/* Caller chain of the first call of each number in a window (frame pointer walk). */
++	if (os_atomic_load(&s->bt_state, relaxed) == 0 && os_atomic_cmpxchg(&s->bt_state, 0, 1, relaxed)) {
++		uint64_t fp = get_saved_state_fp(state);
++		uint32_t n = 0;
++		s->bt[n++] = get_saved_state_lr(state);
++		while (n < 8 && fp != 0 && (fp & 0xf) == 0) {
++			uint64_t frame[2];
++			if (copyin((user_addr_t)fp, frame, sizeof(frame)) != 0 || frame[1] == 0) {
++				break;
++			}
++			s->bt[n++] = frame[1];
++			if (frame[0] <= fp) {
++				break;
++			}
++			fp = frame[0];
++		}
++		s->bt_n = n;
++		os_atomic_store(&s->bt_state, 2, release);
++	}
 +
 +	uint64_t deadline = os_atomic_load(&unixnu_st_deadline, relaxed);
 +	if (now < deadline) {
@@ -285,15 +314,21 @@ index 6cb830d..69461bf 100644
 +	if (!os_atomic_cmpxchg(&unixnu_st_deadline, deadline, next, relaxed)) {
 +		return;
 +	}
-+	if (deadline == 0) {
-+		/* First call: identify the images once and open the first window. */
-+		task_t task = current_task();
-+		vm_shared_region_t sr = vm_shared_region_get(task);
++	if (!os_atomic_load(&unixnu_st_have_cache, acquire)) {
++		/* Start of the shared cache in this task; retried each window until dyld has mapped it. */
++		vm_shared_region_t sr = vm_shared_region_get(current_task());
 +		if (sr != NULL) {
-+			unixnu_st_slide = sr->sr_slide;
-+			unixnu_st_have_slide = true;
++			mach_vm_offset_t start = 0;
++			if (vm_shared_region_start_address(sr, &start, NULL) == KERN_SUCCESS) {
++				unixnu_st_cache = start;
++				os_atomic_store(&unixnu_st_have_cache, true, release);
++			}
 +			vm_shared_region_deallocate(sr);
 +		}
++	}
++	if (deadline == 0) {
++		/* First call: open the first window. */
++		task_t task = current_task();
 +		unixnu_st_main = task->mach_header_vm_address;
 +		os_atomic_store(&unixnu_st_window_start, now, relaxed);
 +		os_atomic_store(&unixnu_st_call, thread_call_allocate_with_options(unixnu_systrace_dump, NULL,
@@ -310,7 +345,7 @@ index 6cb830d..69461bf 100644
  void
  mach_syscall(struct arm_saved_state *state)
  {
-@@ -192,6 +405,9 @@ mach_syscall(struct arm_saved_state *state)
+@@ -192,6 +440,9 @@ mach_syscall(struct arm_saved_state *state)
  	int call_number = get_saved_state_svc_number(state);
  	int64_t exc_code;
  	int argc;
@@ -320,7 +355,7 @@ index 6cb830d..69461bf 100644
  
  	struct uthread *ut = get_bsdthread_info(current_thread());
  	uthread_reset_proc_refcount(ut);
-@@ -212,6 +428,12 @@ mach_syscall(struct arm_saved_state *state)
+@@ -212,6 +463,12 @@ mach_syscall(struct arm_saved_state *state)
  	kprintf("mach_syscall(0x%08x) code=%d\n", state, call_number);
  #endif
  
@@ -333,7 +368,7 @@ index 6cb830d..69461bf 100644
  	mach_call = (mach_call_t)mach_trap_table[call_number].mach_trap_function;
  
  	if (mach_call == (mach_call_t)kern_invalid) {
-@@ -289,6 +511,14 @@ skip_machcall:
+@@ -289,6 +546,14 @@ skip_machcall:
  	    MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_END,
  	    retval, 0, 0, 0, 0);
  

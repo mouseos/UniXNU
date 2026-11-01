@@ -52,7 +52,9 @@ src = r'''#include <stdio.h>
 #define THREAD_CALL_PRIORITY_LOW 0
 #define THREAD_CALL_OPTIONS_ONCE 0
 #define bzero(p, n) memset((p), 0, (n))
-struct arm_saved_state { uint64_t pc, lr; };
+struct arm_saved_state { uint64_t pc, lr, fp; };
+typedef uint64_t mach_vm_offset_t;
+#define KERN_SUCCESS 0
 typedef void *thread_call_param_t;
 typedef void (*thread_call_func_t)(thread_call_param_t, thread_call_param_t);
 typedef struct { thread_call_func_t f; int pending; } *thread_call_t;
@@ -76,25 +78,37 @@ static task_t current_task(void) { return (task_t)&the_task; }
 static struct { uint32_t sr_slide; } region = { 0x1c3c000 };
 static vm_shared_region_t vm_shared_region_get(task_t t) { (void)t; return (vm_shared_region_t)&region; }
 static void vm_shared_region_deallocate(vm_shared_region_t r) { (void)r; }
+static int cache_ready;
+static int vm_shared_region_start_address(vm_shared_region_t r, mach_vm_offset_t *a, void *t)
+{ (void)r; (void)t; if (!cache_ready) return 1; *a = 0x186a44000; return KERN_SUCCESS; }
+static int copyin(uint64_t a, void *b, unsigned long n) { if (!a) return 14; memcpy(b, (void *)(uintptr_t)a, n); return 0; }
 static uint64_t get_saved_state_pc(struct arm_saved_state *s) { return s->pc; }
 static uint64_t get_saved_state_lr(struct arm_saved_state *s) { return s->lr; }
+static uint64_t get_saved_state_fp(struct arm_saved_state *s) { return s->fp; }
 static uint64_t tid = 7;
 static void *current_thread(void) { return 0; }
 static uint64_t thread_tid(void *t) { (void)t; return tid; }
 static char out[64][512]; static int lines;
 static int capture(const char *f, ...) { va_list a; va_start(a, f); vsnprintf(out[lines++], sizeof(out[0]), f, a); va_end(a); return 0; }
 #define printf capture
+static int test_snprintf(char *b, size_t n, const char *f, ...) { va_list a; va_start(a, f); int r = vsnprintf(b, n, f, a); va_end(a); return r; }
+#define snprintf test_snprintf
 ''' + core + r'''
 static void run_call(void) { assert(call.pending == 1); call.pending = 0; lines = 0; call.f(0, 0); }
 int main(void)
 {
-	struct arm_saved_state st = { 0x1e4f56794, 0x1b090c308 };
+	static uint64_t frames[3][2] __attribute__((aligned(16)));
+	frames[0][0] = (uint64_t)(uintptr_t)frames[1]; frames[0][1] = 0x100038800;
+	frames[1][0] = (uint64_t)(uintptr_t)frames[2]; frames[1][1] = 0x100024900;
+	frames[2][0] = 0; frames[2][1] = 0x195fb954c;
+	struct arm_saved_state st = { 0x1e4f56794, 0x1b090c308, (uint64_t)(uintptr_t)frames[0] };
 	uint64_t a_err[4] = { 3, 0x16f1e2b10, 1, 0 }, a_ok[4] = { 9, 9, 9, 9 };
 	assert(!unixnu_systrace_wants(1));
 	unixnu_st_pid = 1;
 	assert(unixnu_systrace_wants(1) && !unixnu_systrace_wants(2));
 	unixnu_systrace_note(20, 0, 0, a_ok, -1, &st, 0);
 	assert(lines == 0 && call.pending == 0);
+	cache_ready = 1;
 	for (int i = 0; i < 3; i++) { unixnu_systrace_enter(374); clock_now += 100; unixnu_systrace_note(374, 35, 0, a_err, -1, &st, clock_now - 100); }
 	tid = 8;
 	unixnu_systrace_enter(374); unixnu_systrace_note(374, 0, 5, a_ok, -1, &st, clock_now);
@@ -119,8 +133,9 @@ int main(void)
 	assert(strstr(out[0], "enabled pid=1"));
 	for (int i = 0; i < lines - 1; i++) memcpy(out[i], out[i + 1], sizeof(out[0]));
 	lines--;
-	assert(strstr(out[0], "pid=1 ") && strstr(out[0], "slide=0x1c3c000") && strstr(out[0], "main=0x100b88000"));
+	assert(strstr(out[0], "pid=1 ") && strstr(out[0], "cache=0x186a44000") && strstr(out[0], "main=0x100b88000"));
 	assert(strstr(out[0], "total=27 numbers=7"));
+	assert(strstr(out[3], " bt=0x1b090c308,0x100038800,0x100024900,0x195fb954c"));
 	assert(strstr(out[1], "bsd=368 in=10 n=0 err=0"));
 	assert(strstr(out[2], "mach=31 in=5 n=5 err=0 last_err=0 cont=5 rs=0 avg_ns=0"));
 	assert(strstr(out[3], "bsd=374 in=4 n=4 err=3 last_err=35 cont=0 rs=0 avg_ns=75 ret=0x0 a=0x3,0x16f1e2b10,0x1,0x0 tid=7 pc=0x1e4f56794 lr=0x1b090c308"));
@@ -134,7 +149,10 @@ int main(void)
 	for (int i = 1; i < lines; i++) {
 		if (strstr(out[i], "bsd=59 in=2 n=2 err=0 last_err=0 cont=0 rs=2")) restarts++;
 		char *p = strstr(out[i], "bsd=338 ");
-		if (p && strstr(p, " path=/ppp") && strlen(strstr(p, " path=")) == strlen(" path=") + 63 + 1) longs++;
+		if (p && strstr(p, " path=/ppp")) {
+			char *q = strstr(p, " path=") + strlen(" path="), *e = strstr(q, " bt=");
+			if ((e ? (size_t)(e - q) : strlen(q)) == 63) longs++;
+		}
 	}
 	assert(restarts == 1 && longs == 1);
 	assert(lines == 8);
@@ -144,6 +162,7 @@ int main(void)
 	unixnu_systrace_note(20, 0, 0, a_ok, -1, &st, clock_now);
 	run_call();
 	assert(strstr(out[0], "total=2 numbers=1") && lines == 2 && !strstr(out[0], "enabled"));
+	assert(strstr(out[1], " bt=0x1b090c308,"));
 	unixnu_st_max_windows = 2;
 	clock_now += 1000 * NSEC_PER_MSEC;
 	unixnu_systrace_note(20, 0, 0, a_ok, -1, &st, clock_now);
