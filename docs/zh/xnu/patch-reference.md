@@ -41,6 +41,7 @@
 | `non-apple-pmap-field` | 匹配非 PAC pmap 字段布局 |
 | `non-apple-iommu-bootstrap` | 保护 UAT 和 SART bootstrap 及 PPL 代码 |
 | `non-apple-cache-monitor` | 保护 monitor enable 并导出 cache clean 符号 |
+| `zzzzz-low-globals-below` | 可选（`CONFIG_XNU_LOW_GLOBALS_BELOW`）：把 4 KiB、非大内存配置的 low globals 下移 512 MiB（0xffffffefe0000000），为其 L1 块建立 L2 表，并在 `__DATA_CONST,__lowglo_base` 中记录地址供 DarwinBoot 读取。内核静态区因此可从 0xffffffefe0800000 开始，加载器可以把内核之下很远的内存交给 XNU（`[payload.adt] memory_floor`）。依赖 0xfffffff000000000 固定地址查找 low globals 的调试器将找不到它们 |
 
 ## 安全与 owner root
 

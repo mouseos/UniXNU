@@ -41,6 +41,7 @@ Patches apply in name order from `patches/xnu/*.patch` and `kits/NativePrelink/p
 | `non-apple-pmap-field` | Matches the non-PAC pmap field layout |
 | `non-apple-iommu-bootstrap` | Guards UAT and SART bootstrap and PPL code |
 | `non-apple-cache-monitor` | Guards the monitor enable and exports the cache clean symbol |
+| `zzzzz-low-globals-below` | Optional (`CONFIG_XNU_LOW_GLOBALS_BELOW`): moves the 4 KiB, non-large-memory low globals 512 MiB lower (0xffffffefe0000000), gives their L1 block an L2 table, and records the address in `__DATA_CONST,__lowglo_base` for DarwinBoot. The kernel's static region may then start down to 0xffffffefe0800000, so a loader can hand XNU memory far below the kernel (`[payload.adt] memory_floor`). Debuggers that expect the low globals at 0xfffffff000000000 do not find them there |
 
 ## Security and owner root
 
