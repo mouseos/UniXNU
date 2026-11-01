@@ -48,6 +48,7 @@ ADT 使用 Apple 的扁平节点编码。`[payload.adt] tool` 指定的板级脚
 | `--output` | `Payloads/kernel.macho.adt` |
 | `--dram-size` | `[payload] dram_size` |
 | `--owned-memory-size` | `[payload.adt] owned_memory_size` |
+| `--memory-floor` | `[payload.adt] memory_floor`（可选） |
 | `--root-match-volume-uuid` | `[payload.adt] root_match_volume_uuid` |
 | `--chip-id` | `[payload.adt] chip_id` |
 | `--cpu-regs` | `[payload.adt] cpu_regs` |

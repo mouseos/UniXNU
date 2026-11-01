@@ -121,6 +121,7 @@ Types are `s` for string, `x` for hex cells, `i` for decimal cells, `u` for unsi
 | `tool` | string | ADT generator path |
 | `chip_id` | string | Chip ID for the ADT |
 | `owned_memory_size` | string | Contiguous window request |
+| `memory_floor` | string | Optional lowest address DarwinBoot may also give XNU below the window (`darwinboot-memory-floor`); the ADT tool must accept `--memory-floor` |
 | `root_match_volume_uuid` | string | Root volume UUID |
 | `cpu_regs` | string | CPU MPIDR values, comma separated |
 | `psci_method` | string | `smc` or `hvc` |

@@ -48,6 +48,7 @@ The ADT uses Apple's flattened node encoding. The board script named in `[payloa
 | `--output` | `Payloads/kernel.macho.adt` |
 | `--dram-size` | `[payload] dram_size` |
 | `--owned-memory-size` | `[payload.adt] owned_memory_size` |
+| `--memory-floor` | `[payload.adt] memory_floor` (optional) |
 | `--root-match-volume-uuid` | `[payload.adt] root_match_volume_uuid` |
 | `--chip-id` | `[payload.adt] chip_id` |
 | `--cpu-regs` | `[payload.adt] cpu_regs` |

@@ -175,7 +175,9 @@ def build(ctx, kernel=None):
     if data:
         shutil.copyfile(data, payloads / 'scratch-data.img')
     command = ['python3', ctx.tree / adt['tool'], '--output', payloads / 'kernel.macho.adt', '--dram-size', str(spec['dram_size'])]
-    for key, flag in (('owned_memory_size', '--owned-memory-size'), ('root_match_volume_uuid', '--root-match-volume-uuid'),
+    # memory_floor (optional): the lowest address DarwinBoot may also hand XNU below the window (darwinboot-memory-floor).
+    for key, flag in (('owned_memory_size', '--owned-memory-size'), ('memory_floor', '--memory-floor'),
+                      ('root_match_volume_uuid', '--root-match-volume-uuid'),
                       ('chip_id', '--chip-id'), ('cpu_regs', '--cpu-regs'), ('psci_method', '--psci-method')):
         if adt.get(key) is not None:
             command += [flag, str(adt[key])]

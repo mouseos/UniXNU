@@ -121,6 +121,7 @@
 | `tool` | 字符串 | ADT 生成器路径 |
 | `chip_id` | 字符串 | ADT 芯片 ID |
 | `owned_memory_size` | 字符串 | 连续窗口请求 |
+| `memory_floor` | 字符串 | 可选：DarwinBoot 可在窗口之下额外交给 XNU 的最低地址（`darwinboot-memory-floor`）；ADT 工具须支持 `--memory-floor` |
 | `root_match_volume_uuid` | 字符串 | 根卷 UUID |
 | `cpu_regs` | 字符串 | CPU MPIDR 值，逗号分隔 |
 | `psci_method` | 字符串 | `smc` 或 `hvc` |
