@@ -87,16 +87,17 @@ index e015003..c3a4058 100644
  # These headers will be available with #include <arm64/header_file.h>
  EXPORT_MD_DIR = arm64
 diff --git a/osfmk/arm64/bsd_arm64.c b/osfmk/arm64/bsd_arm64.c
-index 6cb830d..bbab896 100644
+index 6cb830d..8b31d98 100644
 --- a/osfmk/arm64/bsd_arm64.c
 +++ b/osfmk/arm64/bsd_arm64.c
-@@ -173,6 +173,254 @@ extern int debug_syscall_rejection_mode;
+@@ -173,6 +173,276 @@ extern int debug_syscall_rejection_mode;
  extern bool debug_syscall_rejection_handle(int syscall_mach_trap_number);
  #endif /* CONFIG_DEBUG_SYSCALL_REJECTION */
  
 +#if defined(XNU_SYSCALL_TRACE) && XNU_SYSCALL_TRACE
 +#include <arm64/unixnu_systrace.h>
 +#include <sys/errno.h>
++#include <string.h>
 +#include <kern/startup.h>
 +#include <kern/clock.h>
 +#include <kern/thread_call.h>
@@ -116,6 +117,8 @@ index 6cb830d..bbab896 100644
 +#define UNIXNU_ST_SLOTS (UNIXNU_SYSTRACE_BSD_SLOTS + MACH_TRAP_TABLE_COUNT)
 +
 +TUNABLE(int32_t, unixnu_st_pid, "unixnu-systrace-pid", -1);
++/* Alternative to the pid: the first process with this name (pids differ between boots). */
++TUNABLE_STR(unixnu_st_name, 33, "unixnu-systrace-name", "");
 +TUNABLE(uint32_t, unixnu_st_period_ms, "unixnu-systrace-ms", 1000);
 +TUNABLE(uint32_t, unixnu_st_lines, "unixnu-systrace-lines", 8);
 +TUNABLE(uint32_t, unixnu_st_max_windows, "unixnu-systrace-max", 1800);
@@ -148,10 +151,29 @@ index 6cb830d..bbab896 100644
 +static uint64_t unixnu_st_main;
 +static thread_call_t unixnu_st_call;
 +
++extern char *proc_best_name(struct proc *);
++static int32_t unixnu_st_match_pid = -1;
++
++static int32_t
++unixnu_systrace_target(void)
++{
++	return unixnu_st_pid >= 0 ? unixnu_st_pid : os_atomic_load(&unixnu_st_match_pid, relaxed);
++}
++
++/* Called in the context of the process that made the call. */
 +bool
 +unixnu_systrace_wants(int pid)
 +{
-+	return unixnu_st_pid >= 0 && pid == unixnu_st_pid;
++	int32_t target = unixnu_systrace_target();
++	if (target >= 0 || unixnu_st_name[0] == 0) {
++		return target >= 0 && pid == target;
++	}
++	const char *name = proc_best_name(current_proc());
++	if (name == NULL || strncmp(name, unixnu_st_name, sizeof(unixnu_st_name)) != 0) {
++		return false;
++	}
++	os_atomic_cmpxchg(&unixnu_st_match_pid, -1, pid, relaxed);
++	return os_atomic_load(&unixnu_st_match_pid, relaxed) == pid;
 +}
 +
 +/* Calls that never return normally (workqueue park, exit) only count here. */
@@ -188,11 +210,11 @@ index 6cb830d..bbab896 100644
 +		active += n != 0;
 +	}
 +	if (os_atomic_load(&unixnu_st_windows, relaxed) == 1) {
-+		printf("unixnu systrace enabled pid=%d ms=%u lines=%u max=%u\n", unixnu_st_pid,
-+		    unixnu_st_period_ms, unixnu_st_lines, unixnu_st_max_windows);
++		printf("unixnu systrace enabled pid=%d name=%s ms=%u lines=%u max=%u\n", unixnu_systrace_target(),
++		    unixnu_st_name, unixnu_st_period_ms, unixnu_st_lines, unixnu_st_max_windows);
 +	}
 +	printf("unixnu systrace pid=%d t_ms=%llu win_ms=%llu total=%u numbers=%u cache=%s0x%llx main=0x%llx w=%u\n",
-+	    unixnu_st_pid, now_ns / NSEC_PER_MSEC, win_ns / NSEC_PER_MSEC, total, active,
++	    unixnu_systrace_target(), now_ns / NSEC_PER_MSEC, win_ns / NSEC_PER_MSEC, total, active,
 +	    os_atomic_load(&unixnu_st_have_cache, acquire) ? "" : "none:", unixnu_st_cache, unixnu_st_main,
 +	    os_atomic_load(&unixnu_st_windows, relaxed));
 +	for (uint32_t line = 0; line < unixnu_st_lines; line++) {
@@ -345,7 +367,7 @@ index 6cb830d..bbab896 100644
  void
  mach_syscall(struct arm_saved_state *state)
  {
-@@ -192,6 +440,9 @@ mach_syscall(struct arm_saved_state *state)
+@@ -192,6 +462,9 @@ mach_syscall(struct arm_saved_state *state)
  	int call_number = get_saved_state_svc_number(state);
  	int64_t exc_code;
  	int argc;
@@ -355,7 +377,7 @@ index 6cb830d..bbab896 100644
  
  	struct uthread *ut = get_bsdthread_info(current_thread());
  	uthread_reset_proc_refcount(ut);
-@@ -212,6 +463,12 @@ mach_syscall(struct arm_saved_state *state)
+@@ -212,6 +485,12 @@ mach_syscall(struct arm_saved_state *state)
  	kprintf("mach_syscall(0x%08x) code=%d\n", state, call_number);
  #endif
  
@@ -368,7 +390,7 @@ index 6cb830d..bbab896 100644
  	mach_call = (mach_call_t)mach_trap_table[call_number].mach_trap_function;
  
  	if (mach_call == (mach_call_t)kern_invalid) {
-@@ -289,6 +546,14 @@ skip_machcall:
+@@ -289,6 +568,14 @@ skip_machcall:
  	    MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_END,
  	    retval, 0, 0, 0, 0);
  
@@ -420,10 +442,10 @@ index ae94c7e..5b6b73e 100644
  #if MACH_ASSERT
 diff --git a/osfmk/arm64/unixnu_systrace.h b/osfmk/arm64/unixnu_systrace.h
 new file mode 100644
-index 0000000..1f95de0
+index 0000000..658d471
 --- /dev/null
 +++ b/osfmk/arm64/unixnu_systrace.h
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,33 @@
 +/*
 + * Opt-in per-process syscall profile (build: XNU_SYSCALL_TRACE=1, runtime:
 + * boot-arg unixnu-systrace-pid). Implemented in osfmk/arm64/bsd_arm64.c.
@@ -441,12 +463,13 @@ index 0000000..1f95de0
 +#define UNIXNU_SYSTRACE_BSD_SLOTS 600u
 +
 +extern int32_t unixnu_st_pid;
++extern char unixnu_st_name[33];
 +
-+/* Cheap gate checked before any per-call work; false unless the boot-arg is set. */
++/* Cheap gate checked before any per-call work; false unless a boot-arg is set. */
 +static inline bool
 +unixnu_systrace_on(void)
 +{
-+	return __builtin_expect(unixnu_st_pid >= 0, 0);
++	return __builtin_expect(unixnu_st_pid >= 0 || unixnu_st_name[0] != 0, 0);
 +}
 +
 +extern bool unixnu_systrace_wants(int pid);

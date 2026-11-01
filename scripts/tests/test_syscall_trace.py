@@ -43,6 +43,11 @@ src = r'''#include <stdio.h>
 #define os_atomic_xchg(p, v, o) __atomic_exchange_n((p), (v), o)
 #define os_atomic_cmpxchg(p, e, n, o) ({ __typeof__(*(p)) _e = (e); __atomic_compare_exchange_n((p), &_e, (n), 0, o, o); })
 #define TUNABLE(t, v, k, d) t v = d
+#define TUNABLE_STR(v, n, k, d) char v[n] = d
+struct proc;
+static const char *cur_name = "launchd";
+static struct proc *current_proc(void) { return (struct proc *)1; }
+char *proc_best_name(struct proc *p) { (void)p; return (char *)cur_name; }
 #define MACH_TRAP_TABLE_COUNT 128
 #define ERESTART (-1)
 #define EJUSTRETURN (-2)
@@ -103,7 +108,15 @@ int main(void)
 	frames[2][0] = 0; frames[2][1] = 0x195fb954c;
 	struct arm_saved_state st = { 0x1e4f56794, 0x1b090c308, (uint64_t)(uintptr_t)frames[0] };
 	uint64_t a_err[4] = { 3, 0x16f1e2b10, 1, 0 }, a_ok[4] = { 9, 9, 9, 9 };
-	assert(!unixnu_systrace_wants(1));
+	assert(!unixnu_systrace_on() && !unixnu_systrace_wants(1));
+	/* Name mode: the first process with the name is followed by its pid. */
+	snprintf(unixnu_st_name, sizeof(unixnu_st_name), "audiomxd");
+	assert(unixnu_systrace_on());
+	cur_name = "launchd"; assert(!unixnu_systrace_wants(1));
+	cur_name = "audiomxd"; assert(unixnu_systrace_wants(104));
+	cur_name = "audiomxd"; assert(!unixnu_systrace_wants(105));
+	cur_name = "launchd"; assert(unixnu_systrace_wants(104) && unixnu_systrace_target() == 104);
+	unixnu_st_name[0] = 0; unixnu_st_match_pid = -1;
 	unixnu_st_pid = 1;
 	assert(unixnu_systrace_wants(1) && !unixnu_systrace_wants(2));
 	unixnu_systrace_note(20, 0, 0, a_ok, -1, &st, 0);
