@@ -60,6 +60,7 @@ Use `amfi_get_out_of_my_way=1` only in a diagnostic boot. It changes the securit
 | `sheng-log-reserve=<mib>` | End-of-userdata reserve for the diagnostic log and export region, default 1024 |
 | `sheng-disable-watchdogd=1` | Stops the watchdog daemon |
 | `sheng-disable-jobs=<list>` | Skips the named launch jobs |
+| `native-ram-seed-replace=OLD:NEW` | Replaces equal-length bytes in the seed pages held in RAM after the seed identity is taken (NativeRamBlock README) |
 | `offline-legacy-*=1` | Enables the legacy display and input probes |
 | `offline-owner-root-check=1` | Starts the verified root check |
 | `offline-owner-root-audit=1` | Enables the root binding audit |
