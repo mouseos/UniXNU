@@ -1,6 +1,6 @@
 --- a/bsd/kern/kern_memorystatus.c
 +++ b/bsd/kern/kern_memorystatus.c
-@@ -181,6 +181,70 @@
+@@ -181,6 +181,72 @@
   * soon be in effect down in the ledgers.
   */
  
@@ -60,10 +60,12 @@
 +static int32_t
 +memorystatus_unixnu_idle_floor(proc_t p, int32_t limit)
 +{
++	static uint32_t raised_reports;
++
 +	if (limit <= 0 || !memorystatus_unixnu_idle_match(p->p_name) || limit >= memorystatus_unixnu_idle_mb) {
 +		return limit;
 +	}
-+	printf("unixnu msidle pid=%d name=%s inactive limit %dMB raised to %dMB\n", proc_getpid(p), p->p_name, limit,
++	if (__atomic_fetch_add(&raised_reports, 1, __ATOMIC_RELAXED) < 16) printf("unixnu msidle pid=%d name=%s inactive limit %dMB raised to %dMB\n", proc_getpid(p), p->p_name, limit,
 +	    memorystatus_unixnu_idle_mb);
 +	return memorystatus_unixnu_idle_mb;
 +}
@@ -71,7 +73,7 @@
  #define SET_ACTIVE_LIMITS_LOCKED(p, limit, is_fatal)                    \
  MACRO_BEGIN                                                             \
  (p)->p_memstat_memlimit_active = (limit);                               \
-@@ -193,7 +257,7 @@
+@@ -193,7 +259,7 @@
  
  #define SET_INACTIVE_LIMITS_LOCKED(p, limit, is_fatal)                  \
  MACRO_BEGIN                                                             \
@@ -80,9 +82,28 @@
     if (is_fatal) {                                                      \
  	   (p)->p_memstat_state |= P_MEMSTAT_MEMLIMIT_INACTIVE_FATAL;   \
     } else {                                                             \
+@@ -1377,6 +1443,9 @@
+ 	kern_return_t result;
+ 	int i;
+ 
++	/* Read msidle= once here, before any process gets a limit (the floor reads only the result). */
++	memorystatus_unixnu_idle_read();
++
+ #if CONFIG_FREEZE
+ 	memorystatus_freeze_jetsam_band = JETSAM_PRIORITY_FREEZER;
+ 	memorystatus_frozen_processes_max = FREEZE_PROCESSES_MAX;
 --- a/osfmk/kern/task.c
 +++ b/osfmk/kern/task.c
-@@ -7109,6 +7109,35 @@
+@@ -506,6 +506,8 @@
+ extern void     memorystatus_log_diag_threshold_exception(const int diag_threshold_value);
+ extern boolean_t memorystatus_allowed_vm_map_fork(task_t task, bool *is_large);
+ extern uint64_t  memorystatus_available_memory_internal(struct proc *p);
++/* UniXNU msidle= (bsd/kern/kern_memorystatus.c): is this the process named by the boot argument. */
++extern bool     memorystatus_unixnu_idle_match(const char *name);
+ 
+ #if DEVELOPMENT || DEBUG
+ extern void memorystatus_abort_vm_map_fork(task_t);
+@@ -7109,6 +7111,36 @@
  	}
  #endif /* CONFIG_COREDUMP */
  
@@ -90,8 +111,8 @@
 +	 * UniXNU opt-in (the process named by msidle=<name>:<MB> only): what the footprint is made of when a limit is
 +	 * crossed, in KB, so an IOKit (GPU) mapping can be told from the process's own dirty memory.
 +	 */
++#if CONFIG_MEMORYSTATUS
 +	{
-+		extern bool memorystatus_unixnu_idle_match(const char *name);
 +		if (cur_bsd_info != NULL && memorystatus_unixnu_idle_match(procname)) {
 +			const int ms_index[] = {
 +				task_ledgers.phys_footprint, task_ledgers.internal, task_ledgers.internal_compressed,
@@ -114,6 +135,7 @@
 +			    ms_kb[10], ms_kb[11], ms_kb[12]);
 +		}
 +	}
++#endif /* CONFIG_MEMORYSTATUS */
 +
  	if (disable_exc_resource) {
  		printf("process %s[%d] crossed memory high watermark (%d MB); EXC_RESOURCE "
