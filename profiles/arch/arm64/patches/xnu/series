@@ -17,6 +17,7 @@
 ../../../../../patches/xnu/native-aes-personality.patch
 ../../../../../patches/xnu/native-arm-pan.patch
 ../../../../../patches/xnu/native-ns16550-serial.patch
+../../../../../patches/xnu/native-board-init-hook.patch
 ../../../../../patches/xnu/native-dt-panic-region.patch
 ../../../../../patches/xnu/native-lookup-trace.patch
 ../../../../../patches/xnu/native-priv-work-interval.patch
@@ -55,3 +56,4 @@
 ../../../../../patches/xnu/zzy-staged-system-apps.patch
 ../../../../../patches/xnu/zzyb-native-cryptex-os-view.patch
 ../../../../../patches/xnu/zzyc-owner-skip-launch-constraints.patch
+../../../../../patches/xnu/zz-native-board-launch-hook.patch

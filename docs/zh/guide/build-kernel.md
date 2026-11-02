@@ -85,6 +85,8 @@ DEPLOYMENT_TARGET_FLAGS="-miphoneos-version-min=17.0 -DXNU_TARGET_OS_IOS"
 | `XNU_NATIVE_ARCH_TIMER` | 使用架构定时器入口 | 无 |
 | `XNU_NATIVE_PAN` | 启用 ARMv8.1 PAN | 无 |
 | `XNU_NS16550_UART` | 把固件已初始化的 16550 UART（`/arm-io/uart0`、`ns16550a`、`reg-shift`、`reg-io-width`）用作轮询控制台 | 无 |
+| `XNU_BOARD_INIT` | bsd_init 在挂载根之前调用一次板级钩子 `unixnu_board_init()` | `XNU_EXTRA_LD_ARCHIVES` 中的板级归档 |
+| `XNU_BOARD_LAUNCH` | load_init_program 在 launchd 之前以 pid 1 调用 `unixnu_board_launch()`；返回非零时 panic | `XNU_EXTRA_LD_ARCHIVES` 中的板级归档 |
 | `XNU_DT_PANIC_REGION` | 从设备树读取 panic 区域 | 无 |
 | `XNU_TRUST_CACHE_RUNTIME` | 初始化 trust cache 运行时 | 无 |
 | `XNU_BOOT_PROGRESS` | 加入启动进度层 | `build/boot-progress/libBootProgress.a` |

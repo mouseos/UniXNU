@@ -27,6 +27,8 @@
 | `native-smp-secondary` | `MAX_CPUS` 提高到 8，BCM2837 secondary CPU 使用 MPIDR Affinity1 |
 | `native-arm-pan` | 设置 `XNU_NATIVE_PAN` 时启用 ARMv8.1 PAN |
 | `native-ns16550-serial` | 设置 `XNU_NS16550_UART=1` 时为 pe_serial 加入轮询式 16550 控制台 |
+| `native-board-init-hook` | `XNU_BOARD_INIT=1` 时由 bsd_init 调用板级钩子 `unixnu_board_init()` |
+| `zz-native-board-launch-hook` | `XNU_BOARD_LAUNCH=1` 时在 launchd 之前调用板级钩子 `unixnu_board_launch()` |
 | `native-dt-panic-region` | 从设备树读取并校验 panic 日志区域 |
 
 ## 4 KiB 页
