@@ -23,9 +23,11 @@ class Bootstrap(unittest.TestCase):
             'source_reference_bootstrap': True, 'candidate_validator': 'check.py'}})
         self.inputs = []
         self.calls = 0
+        self.references = []
 
-    def build(self, ctx, modules, reference_pass=None):
+    def build(self, ctx, modules, reference_pass=None, reference=None):
         self.inputs.append((reference_pass, self.path.read_bytes() if self.path.exists() else None))
+        self.references.append(reference.read_bytes() if reference else None)
 
     def prelink(self, ctx):
         self.calls += 1
@@ -38,13 +40,20 @@ class Bootstrap(unittest.TestCase):
              patch.object(kernel, 'validate_candidate') as validate:
             kernel.build_checked(self.ctx, {})
         self.assertEqual(self.inputs, [('bootstrap', None), ('final', b'source-reference')])
+        self.assertEqual(self.references, [None, b'source-reference'])
         self.assertEqual(self.path.with_name('kernel.reference.macho').read_bytes(), b'source-reference')
         validate.assert_called_once_with(self.ctx, self.path)
 
-    def test_validator_is_mandatory(self):
+    def test_validator_is_optional_and_stale_layout_removed(self):
         del self.ctx.board['kernel']['candidate_validator']
-        with self.assertRaises(Error): kernel.build_checked(self.ctx, {})
-        self.assertEqual(self.path.read_bytes(), b'unknown-old-reference')
+        stale_map = self.path.with_suffix('.map.json')
+        stale_map.write_text('{}')
+        with patch.object(kernel, 'build', self.build), patch.object(kernel, 'prelink', self.prelink), \
+             patch.object(kernel, 'validate_candidate') as validate:
+            kernel.build_checked(self.ctx, {})
+        self.assertEqual(self.inputs[0], ('bootstrap', None))
+        self.assertFalse(stale_map.exists())
+        validate.assert_called_once_with(self.ctx, self.path)
 
     def test_invalid_final_propagates(self):
         with patch.object(kernel, 'build', self.build), patch.object(kernel, 'prelink', self.prelink), \

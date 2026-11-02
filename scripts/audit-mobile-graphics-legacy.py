@@ -13,7 +13,9 @@ def require(v,why):
     if not v:raise SystemExit(why)
 # [kernel] source_reference_bootstrap: the final pass audits the first-pass kernel of this configuration.
 REFERENCE_FINAL=os.environ.get('UNIXNU_SOURCE_REFERENCE_PASS')=='final'
-path=(ROOT.parent/'kernel/kernel.macho' if REFERENCE_FINAL
+if REFERENCE_FINAL and not os.environ.get('UNIXNU_SOURCE_REFERENCE_KERNEL'):
+    raise SystemExit('The final reference pass needs UNIXNU_SOURCE_REFERENCE_KERNEL')
+path=(Path(os.environ['UNIXNU_SOURCE_REFERENCE_KERNEL']) if REFERENCE_FINAL
       else ROOT/'build/xnu-prelink/native-owner-mobile-graphics-candidate.macho')
 FAMILY_TEXT_SHA='2e044ee68c1650397e1435234ca6459206262e4c7ed709cb7131c6f664f9bd9b'
 if not path.exists() and not REFERENCE_FINAL:

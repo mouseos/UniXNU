@@ -167,7 +167,7 @@ def build_archives(ctx, env):
             raise Error(f'{key}: {value} not found; supply the archive or its build recipe')
 
 
-def build(ctx, modules, reference_pass=None):
+def build(ctx, modules, reference_pass=None, reference=None):
     log('kernel: XNU')
     script = ctx.tree / 'scripts/build-xnu-4k-baseline.sh'
     if not script.is_file():
@@ -184,6 +184,10 @@ def build(ctx, modules, reference_pass=None):
     if reference_pass is not None:
         # Archive builders that audit against an original reference kernel read the first-pass kernel in the final pass.
         env['UNIXNU_SOURCE_REFERENCE_PASS'] = reference_pass
+    if reference is not None:
+        # The saved copy of the first-pass kernel; its prelink record (.json) lies beside it.
+        env['UNIXNU_SOURCE_REFERENCE_KERNEL'] = str(reference)
+        env['UNIXNU_SOURCE_REFERENCE_SHA256'] = sha256_file(reference)
     env.update(xnu_env(ctx))
     env.update(version_env(modules, ctx))
     # The kernelcache and slide this configuration prelinks against: the static storage interface record
@@ -328,35 +332,36 @@ def prelink(ctx):
 
 
 def validate_candidate(ctx, candidate):
-    """Optional board-owned validation of the prelinked kernel ([kernel] candidate_validator); no board has it by default."""
+    """Optional board-owned validation of the final prelinked kernel and of the kernel the payload packs
+    ([kernel] candidate_validator); no board has it by default."""
     checker = ctx.board.get('kernel', {}).get('candidate_validator')
     if checker:
         script = ctx.device / checker
         if not script.is_file():
             raise Error(f'kernel candidate validator missing: {script}')
-        run(['python3', script, '--kernel', candidate], cwd=ctx.tree,
+        run(['python3', script, '--kernel', candidate], cwd=ctx.tree if ctx.tree.is_dir() else ctx.device,
             env=dict(os.environ, PATH=toolchain_path()), log_file=ctx.logs / 'kernel-validation.log')
 
 
 def build_checked(ctx, modules):
     """Build and prelink the kernel; with [kernel] source_reference_bootstrap = true, first build this configuration's own
-    reference kernel from source, so that archive builders auditing original ABIs (UNIXNU_SOURCE_REFERENCE_PASS=final)
-    never read a reference of unknown origin. Off by default."""
+    reference kernel from source, so that archive builders auditing original ABIs read that kernel in the final pass
+    (UNIXNU_SOURCE_REFERENCE_PASS=final, UNIXNU_SOURCE_REFERENCE_KERNEL) and never a reference of unknown origin.
+    Off by default."""
     spec = ctx.board.get('kernel', {})
     if not spec.get('source_reference_bootstrap', False):
         build(ctx, modules)
         candidate = prelink(ctx)
         validate_candidate(ctx, candidate)
         return candidate
-    if not spec.get('candidate_validator'):
-        raise Error('source_reference_bootstrap requires candidate_validator')
     candidate = ctx.work / 'kernel/kernel.macho'
     record = candidate.with_suffix('.json')
     # Discard any old reference before archives are built: the first pass is generated from the configured source and
     # feeds, not an unknown binary.
     reference_copy = candidate.with_name('kernel.reference.macho')
     record_copy = candidate.with_name('kernel.reference.json')
-    for stale in (candidate, record, reference_copy, record_copy):
+    for stale in (candidate, record, candidate.with_suffix('.map.json'), candidate.with_suffix('.failed.json'),
+                  reference_copy, record_copy):
         stale.unlink(missing_ok=True)
     build(ctx, modules, reference_pass='bootstrap')
     reference = prelink(ctx)
@@ -365,7 +370,7 @@ def build_checked(ctx, modules):
     shutil.copyfile(reference, reference_copy)
     shutil.copyfile(record, record_copy)
     log(f'kernel: source reference sha256 {sha256_file(reference_copy)}')
-    build(ctx, modules, reference_pass='final')
+    build(ctx, modules, reference_pass='final', reference=reference_copy)
     candidate = prelink(ctx)
     validate_candidate(ctx, candidate)
     return candidate
