@@ -49,6 +49,7 @@ on:
         options:
           - macos-latest
           - macos-15-intel
+          - macos-26
         default: macos-latest
 
 permissions:
