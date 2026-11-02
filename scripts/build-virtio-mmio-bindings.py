@@ -17,12 +17,24 @@ from kernel_target import TRIPLE
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--component', choices=['VirtioMmioBlock', 'RamBlock', 'NativeVirtioBlock', 'NativeRamBlock'], default='VirtioMmioBlock')
 parser.add_argument('--directory', type=Path, default=ROOT / 'build/virtio-mmio-block')
+# A block driver outside the catalog (for example a board's eMMC controller in its device repository) names its object
+# here; its archive is lib<OBJECT>.a in --directory. The block class is the IOBlockStorageDevice subclass inside the
+# object, when the controller service publishes separate block devices.
+parser.add_argument('--object', help='object name in --directory (default: the component runtime class)')
+parser.add_argument('--block-class', help='IOBlockStorageDevice subclass in the object (default: the object name)')
 args = parser.parse_args()
 out = args.directory.resolve()
 audit = json.loads((ROOT / 'build/storage-abi/interface-audit.json').read_text())
 canonical = {'NativeVirtioBlock': 'VirtioMmioBlock', 'NativeRamBlock': 'RamBlock'}.get(args.component, args.component)
 component = {'VirtioMmioBlock': 'NativeVirtioBlock', 'RamBlock': 'NativeRamBlock'}[canonical]
-mangled = str(len(component)) + component
+if args.object:
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', args.object):
+        parser.error('--object must be a C++ class name')
+    canonical = component = args.object
+block_class = args.block_class or component
+if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', block_class):
+    parser.error('--block-class must be a C++ class name')
+mangled = str(len(block_class)) + block_class
 obj_path = out / (component + '.o')
 obj = obj_path.read_bytes()
 image = np.macho(obj)
