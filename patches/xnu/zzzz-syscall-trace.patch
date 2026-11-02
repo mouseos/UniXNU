@@ -1,0 +1,481 @@
+diff --git a/bsd/dev/arm/systemcalls.c b/bsd/dev/arm/systemcalls.c
+index 8a1ec42..8da9f6f 100644
+--- a/bsd/dev/arm/systemcalls.c
++++ b/bsd/dev/arm/systemcalls.c
+@@ -79,6 +79,28 @@ __XNU_PRIVATE_EXTERN    int             syscalls_log[SYS_MAXSYSCALL];
+ extern int mach_trap_count;
+ #endif
+ 
++#if defined(XNU_SYSCALL_TRACE) && XNU_SYSCALL_TRACE
++#include <arm64/unixnu_systrace.h>
++_Static_assert(SYS_MAXSYSCALL <= UNIXNU_SYSTRACE_BSD_SLOTS, "syscall profile slots");
++/* Argument index of the path string of a sampled call, or -1. */
++static int
++unixnu_systrace_path_arg(unsigned int code)
++{
++	switch (code) {
++	case SYS_open: case SYS_open_nocancel: case SYS_access: case SYS_stat: case SYS_lstat:
++	case SYS_stat64: case SYS_lstat64: case SYS_readlink: case SYS_getattrlist: case SYS_execve:
++	case SYS_unlink: case SYS_mkdir: case SYS_rename: case SYS_chdir: case SYS_statfs64: case SYS_chmod:
++	case SYS_open_dprotected_np: case SYS_guarded_open_np: case SYS_guarded_open_dprotected_np:
++		return 0;
++	case SYS_openat: case SYS_openat_nocancel: case SYS_fstatat: case SYS_fstatat64:
++	case SYS_faccessat: case SYS_posix_spawn: case SYS_getattrlistat:
++		return 1;
++	default:
++		return -1;
++	}
++}
++#endif
++
+ /*
+  * Function:	unix_syscall
+  *
+@@ -149,6 +171,12 @@ unix_syscall(
+ 	}
+ #endif
+ 	pid = proc_pid(proc);
++#if defined(XNU_SYSCALL_TRACE) && XNU_SYSCALL_TRACE
++	uint64_t unixnu_st_start = unixnu_systrace_on() && unixnu_systrace_wants(pid) ? mach_absolute_time() : 0;
++	if (unixnu_st_start) {
++		unixnu_systrace_enter(syscode);
++	}
++#endif
+ 
+ #ifdef CONFIG_IOCOUNT_TRACE
+ 	uthread->uu_iocount = 0;
+@@ -204,6 +232,13 @@ skip_syscall:
+ 	assertf(prior == NULL, "thread_set_allocation_name(\"%s\") not cleared", kern_allocation_get_name(prior));
+ #endif /* DEBUG || DEVELOPMENT */
+ 
++#if defined(XNU_SYSCALL_TRACE) && XNU_SYSCALL_TRACE
++	if (unixnu_st_start) {
++		unixnu_systrace_note(syscode, error,
++		    (uint64_t)(uint32_t)uthread->uu_rval[0] | ((uint64_t)(uint32_t)uthread->uu_rval[1] << 32),
++		    uthread->uu_arg, unixnu_systrace_path_arg(syscode), state, unixnu_st_start);
++	}
++#endif
+ 	arm_prepare_syscall_return(callp, state, uthread, error);
+ 
+ 	uthread->uu_flag &= ~UT_NOTCANCELPT;
+@@ -264,6 +299,13 @@ unix_syscall_return(int error)
+ 	/*
+ 	 * Get index into sysent table
+ 	 */
++#if defined(XNU_SYSCALL_TRACE) && XNU_SYSCALL_TRACE
++	if (unixnu_systrace_on() && unixnu_systrace_wants(proc_getpid(proc))) {
++		unixnu_systrace_note(code < nsysent ? code : SYS_invalid, error,
++		    (uint64_t)(uint32_t)uthread->uu_rval[0] | ((uint64_t)(uint32_t)uthread->uu_rval[1] << 32),
++		    uthread->uu_arg, unixnu_systrace_path_arg(code < nsysent ? code : SYS_invalid), regs, 0);
++	}
++#endif
+ 	arm_prepare_syscall_return(callp, regs, uthread, error);
+ 
+ 	uthread->uu_flag &= ~UT_NOTCANCELPT;
+diff --git a/osfmk/arm64/Makefile b/osfmk/arm64/Makefile
+index e015003..c3a4058 100644
+--- a/osfmk/arm64/Makefile
++++ b/osfmk/arm64/Makefile
+@@ -45,7 +45,8 @@ EXPORT_MD_LIST = \
+ 	proc_reg.h \
+ 	asm.h \
+ 	tlb.h \
+-	pal_hibernate.h
++	pal_hibernate.h \
++	unixnu_systrace.h
+ 
+ # These headers will be available with #include <arm64/header_file.h>
+ EXPORT_MD_DIR = arm64
+diff --git a/osfmk/arm64/bsd_arm64.c b/osfmk/arm64/bsd_arm64.c
+index 6cb830d..8b31d98 100644
+--- a/osfmk/arm64/bsd_arm64.c
++++ b/osfmk/arm64/bsd_arm64.c
+@@ -173,6 +173,276 @@ extern int debug_syscall_rejection_mode;
+ extern bool debug_syscall_rejection_handle(int syscall_mach_trap_number);
+ #endif /* CONFIG_DEBUG_SYSCALL_REJECTION */
+ 
++#if defined(XNU_SYSCALL_TRACE) && XNU_SYSCALL_TRACE
++#include <arm64/unixnu_systrace.h>
++#include <sys/errno.h>
++#include <string.h>
++#include <kern/startup.h>
++#include <kern/clock.h>
++#include <kern/thread_call.h>
++#include <vm/vm_shared_region.h>
++
++/*
++ * Opt-in syscall profile for one process (build: XNU_SYSCALL_TRACE=1,
++ * runtime: boot-arg unixnu-systrace-pid=<pid>). BSD syscalls and Mach traps
++ * are counted per number over a window. Once per window a thread call prints
++ * the busiest numbers with one sample call each (the latest failing call when
++ * the window had a failure). Updates are lock-free; a racing window reset may
++ * lose a count and a sample may mix two calls. Printing never runs in the
++ * traced process. avg_ns is wall time and includes blocking. Fast traps that
++ * handle_svc serves directly (mach_absolute_time, mach_continuous_time) and
++ * platform_syscall are not counted.
++ */
++#define UNIXNU_ST_SLOTS (UNIXNU_SYSTRACE_BSD_SLOTS + MACH_TRAP_TABLE_COUNT)
++
++TUNABLE(int32_t, unixnu_st_pid, "unixnu-systrace-pid", -1);
++/* Alternative to the pid: the first process with this name (pids differ between boots). */
++TUNABLE_STR(unixnu_st_name, 33, "unixnu-systrace-name", "");
++TUNABLE(uint32_t, unixnu_st_period_ms, "unixnu-systrace-ms", 1000);
++TUNABLE(uint32_t, unixnu_st_lines, "unixnu-systrace-lines", 8);
++TUNABLE(uint32_t, unixnu_st_max_windows, "unixnu-systrace-max", 1800);
++
++struct unixnu_st_slot {
++	uint32_t enter;
++	uint32_t count;
++	uint32_t errors;
++	uint32_t cont;
++	uint32_t restart;
++	uint32_t last_err;
++	uint64_t dur_abs;
++	uint64_t ret;
++	uint64_t arg[4];
++	uint64_t pc;
++	uint64_t lr;
++	uint64_t tid;
++	char path[64];
++	uint32_t bt_state;
++	uint32_t bt_n;
++	uint64_t bt[8];
++};
++
++static struct unixnu_st_slot unixnu_st[UNIXNU_ST_SLOTS];
++static uint64_t unixnu_st_deadline;
++static uint64_t unixnu_st_window_start;
++static uint32_t unixnu_st_windows;
++static uint64_t unixnu_st_cache;
++static bool unixnu_st_have_cache;
++static uint64_t unixnu_st_main;
++static thread_call_t unixnu_st_call;
++
++extern char *proc_best_name(struct proc *);
++static int32_t unixnu_st_match_pid = -1;
++
++static int32_t
++unixnu_systrace_target(void)
++{
++	return unixnu_st_pid >= 0 ? unixnu_st_pid : os_atomic_load(&unixnu_st_match_pid, relaxed);
++}
++
++/* Called in the context of the process that made the call. */
++bool
++unixnu_systrace_wants(int pid)
++{
++	int32_t target = unixnu_systrace_target();
++	if (target >= 0 || unixnu_st_name[0] == 0) {
++		return target >= 0 && pid == target;
++	}
++	const char *name = proc_best_name(current_proc());
++	if (name == NULL || strncmp(name, unixnu_st_name, sizeof(unixnu_st_name)) != 0) {
++		return false;
++	}
++	os_atomic_cmpxchg(&unixnu_st_match_pid, -1, pid, relaxed);
++	return os_atomic_load(&unixnu_st_match_pid, relaxed) == pid;
++}
++
++/* Calls that never return normally (workqueue park, exit) only count here. */
++void
++unixnu_systrace_enter(unsigned int slot)
++{
++	if (slot < UNIXNU_ST_SLOTS) {
++		os_atomic_inc(&unixnu_st[slot].enter, relaxed);
++	}
++}
++
++static uint32_t
++unixnu_systrace_key(struct unixnu_st_slot *s)
++{
++	uint32_t in = os_atomic_load(&s->enter, relaxed);
++	uint32_t out = os_atomic_load(&s->count, relaxed);
++	return in > out ? in : out;
++}
++
++static void
++unixnu_systrace_dump(thread_call_param_t p0 __unused, thread_call_param_t p1 __unused)
++{
++	uint64_t now = mach_absolute_time();
++	uint64_t start = os_atomic_xchg(&unixnu_st_window_start, now, relaxed);
++	uint64_t now_ns, win_ns;
++	uint64_t done[(UNIXNU_ST_SLOTS + 63) / 64] = { 0 };
++	uint32_t total = 0, active = 0;
++
++	absolutetime_to_nanoseconds(now, &now_ns);
++	absolutetime_to_nanoseconds(now - start, &win_ns);
++	for (unsigned int i = 0; i < UNIXNU_ST_SLOTS; i++) {
++		uint32_t n = unixnu_systrace_key(&unixnu_st[i]);
++		total += n;
++		active += n != 0;
++	}
++	if (os_atomic_load(&unixnu_st_windows, relaxed) == 1) {
++		printf("unixnu systrace enabled pid=%d name=%s ms=%u lines=%u max=%u\n", unixnu_systrace_target(),
++		    unixnu_st_name, unixnu_st_period_ms, unixnu_st_lines, unixnu_st_max_windows);
++	}
++	printf("unixnu systrace pid=%d t_ms=%llu win_ms=%llu total=%u numbers=%u cache=%s0x%llx main=0x%llx w=%u\n",
++	    unixnu_systrace_target(), now_ns / NSEC_PER_MSEC, win_ns / NSEC_PER_MSEC, total, active,
++	    os_atomic_load(&unixnu_st_have_cache, acquire) ? "" : "none:", unixnu_st_cache, unixnu_st_main,
++	    os_atomic_load(&unixnu_st_windows, relaxed));
++	for (uint32_t line = 0; line < unixnu_st_lines; line++) {
++		unsigned int best = UNIXNU_ST_SLOTS;
++		uint32_t best_count = 0;
++		for (unsigned int i = 0; i < UNIXNU_ST_SLOTS; i++) {
++			uint32_t n = unixnu_systrace_key(&unixnu_st[i]);
++			if (n > best_count && !(done[i / 64] & (1ULL << (i % 64)))) {
++				best = i;
++				best_count = n;
++			}
++		}
++		if (best == UNIXNU_ST_SLOTS) {
++			break;
++		}
++		done[best / 64] |= 1ULL << (best % 64);
++		struct unixnu_st_slot *s = &unixnu_st[best];
++		uint32_t returned = os_atomic_load(&s->count, relaxed);
++		uint32_t timed = returned > s->cont ? returned - s->cont : 0;
++		uint64_t dur_ns;
++		absolutetime_to_nanoseconds(s->dur_abs, &dur_ns);
++		char bt[8 * 20 + 8];
++		int used = 0;
++		uint32_t frames = os_atomic_load(&s->bt_state, acquire) == 2 ? s->bt_n : 0;
++		bt[0] = 0;
++		for (uint32_t f = 0; f < frames && f < 8; f++) {
++			used += snprintf(bt + used, sizeof(bt) - (size_t)used, "%s0x%llx", f ? "," : " bt=", s->bt[f]);
++		}
++		printf("unixnu systrace %s=%u in=%u n=%u err=%u last_err=%d cont=%u rs=%u avg_ns=%llu ret=0x%llx "
++		    "a=0x%llx,0x%llx,0x%llx,0x%llx tid=%llu pc=0x%llx lr=0x%llx%s%.63s%s\n",
++		    best < UNIXNU_SYSTRACE_BSD_SLOTS ? "bsd" : "mach",
++		    best < UNIXNU_SYSTRACE_BSD_SLOTS ? best : best - UNIXNU_SYSTRACE_BSD_SLOTS,
++		    os_atomic_load(&s->enter, relaxed), returned, s->errors, (int)s->last_err, s->cont, s->restart, timed ? dur_ns / timed : 0ULL, s->ret,
++		    s->arg[0], s->arg[1], s->arg[2], s->arg[3], s->tid, s->pc, s->lr,
++		    s->path[0] ? " path=" : "", s->path, bt);
++	}
++	for (unsigned int i = 0; i < UNIXNU_ST_SLOTS; i++) {
++		if (unixnu_systrace_key(&unixnu_st[i])) {
++			bzero(&unixnu_st[i], sizeof(unixnu_st[i]));
++		}
++	}
++}
++
++void
++unixnu_systrace_note(unsigned int slot, int err, uint64_t ret, const uint64_t *args,
++    int path_arg, struct arm_saved_state *state, uint64_t start_abs)
++{
++	if (slot >= UNIXNU_ST_SLOTS) {
++		return;
++	}
++	struct unixnu_st_slot *s = &unixnu_st[slot];
++	uint64_t now = mach_absolute_time();
++
++	os_atomic_inc(&s->count, relaxed);
++	if (start_abs) {
++		os_atomic_add(&s->dur_abs, now - start_abs, relaxed);
++	} else {
++		os_atomic_inc(&s->cont, relaxed);
++	}
++	if (slot < UNIXNU_SYSTRACE_BSD_SLOTS && (err == ERESTART || err == EJUSTRETURN)) {
++		/* Kernel-internal outcomes (restart, signal return, successful exec), not failures. */
++		os_atomic_inc(&s->restart, relaxed);
++		err = 0;
++	} else if (err) {
++		os_atomic_inc(&s->errors, relaxed);
++		s->last_err = (uint32_t)err;
++	}
++	if (err || os_atomic_load(&s->errors, relaxed) == 0) {
++		s->ret = ret;
++		for (int i = 0; i < 4; i++) {
++			s->arg[i] = args ? args[i] : 0;
++		}
++		s->pc = get_saved_state_pc(state);
++		s->lr = get_saved_state_lr(state);
++		s->tid = thread_tid(current_thread());
++		/* Path argument of the sampled call (user memory, still mapped at return). */
++		char path[sizeof(s->path)] = "";
++		vm_size_t copied = 0;
++		if (path_arg >= 0 && path_arg < 4 && args != NULL && args[path_arg] != 0) {
++			int rc = copyinstr((user_addr_t)args[path_arg], path, sizeof(path), &copied);
++			/* A longer path is still useful truncated; only a fault discards it. */
++			if (rc != 0 && rc != ENAMETOOLONG) {
++				path[0] = '\0';
++			}
++		}
++		path[sizeof(path) - 1] = '\0';
++		memcpy(s->path, path, sizeof(path));
++	}
++	/* Caller chain of the first call of each number in a window (frame pointer walk). */
++	if (os_atomic_load(&s->bt_state, relaxed) == 0 && os_atomic_cmpxchg(&s->bt_state, 0, 1, relaxed)) {
++		uint64_t fp = get_saved_state_fp(state);
++		uint32_t n = 0;
++		s->bt[n++] = get_saved_state_lr(state);
++		while (n < 8 && fp != 0 && (fp & 0xf) == 0) {
++			uint64_t frame[2];
++			if (copyin((user_addr_t)fp, frame, sizeof(frame)) != 0 || frame[1] == 0) {
++				break;
++			}
++			s->bt[n++] = frame[1];
++			if (frame[0] <= fp) {
++				break;
++			}
++			fp = frame[0];
++		}
++		s->bt_n = n;
++		os_atomic_store(&s->bt_state, 2, release);
++	}
++
++	uint64_t deadline = os_atomic_load(&unixnu_st_deadline, relaxed);
++	if (now < deadline) {
++		return;
++	}
++	uint64_t period;
++	nanoseconds_to_absolutetime((uint64_t)(unixnu_st_period_ms < 10 ? 10 : unixnu_st_period_ms) * NSEC_PER_MSEC, &period);
++	uint64_t next = now + period;
++	if (deadline != 0 && os_atomic_load(&unixnu_st_windows, relaxed) >= unixnu_st_max_windows) {
++		next = UINT64_MAX;
++	}
++	if (!os_atomic_cmpxchg(&unixnu_st_deadline, deadline, next, relaxed)) {
++		return;
++	}
++	if (!os_atomic_load(&unixnu_st_have_cache, acquire)) {
++		/* Start of the shared cache in this task; retried each window until dyld has mapped it. */
++		vm_shared_region_t sr = vm_shared_region_get(current_task());
++		if (sr != NULL) {
++			mach_vm_offset_t start = 0;
++			if (vm_shared_region_start_address(sr, &start, NULL) == KERN_SUCCESS) {
++				unixnu_st_cache = start;
++				os_atomic_store(&unixnu_st_have_cache, true, release);
++			}
++			vm_shared_region_deallocate(sr);
++		}
++	}
++	if (deadline == 0) {
++		/* First call: open the first window. */
++		task_t task = current_task();
++		unixnu_st_main = task->mach_header_vm_address;
++		os_atomic_store(&unixnu_st_window_start, now, relaxed);
++		os_atomic_store(&unixnu_st_call, thread_call_allocate_with_options(unixnu_systrace_dump, NULL,
++		    THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE), release);
++		return;
++	}
++	if (next != UINT64_MAX && os_atomic_load(&unixnu_st_call, acquire) != NULL) {
++		os_atomic_inc(&unixnu_st_windows, relaxed);
++		thread_call_enter(unixnu_st_call);
++	}
++}
++#endif /* XNU_SYSCALL_TRACE */
++
+ void
+ mach_syscall(struct arm_saved_state *state)
+ {
+@@ -192,6 +462,9 @@ mach_syscall(struct arm_saved_state *state)
+ 	int call_number = get_saved_state_svc_number(state);
+ 	int64_t exc_code;
+ 	int argc;
++#if defined(XNU_SYSCALL_TRACE) && XNU_SYSCALL_TRACE
++	uint64_t unixnu_st_start = 0;
++#endif
+ 
+ 	struct uthread *ut = get_bsdthread_info(current_thread());
+ 	uthread_reset_proc_refcount(ut);
+@@ -212,6 +485,12 @@ mach_syscall(struct arm_saved_state *state)
+ 	kprintf("mach_syscall(0x%08x) code=%d\n", state, call_number);
+ #endif
+ 
++#if defined(XNU_SYSCALL_TRACE) && XNU_SYSCALL_TRACE
++	if (unixnu_systrace_on() && unixnu_systrace_wants(proc_pid(current_proc()))) {
++		unixnu_st_start = mach_absolute_time();
++		unixnu_systrace_enter(UNIXNU_SYSTRACE_BSD_SLOTS + (unsigned int)call_number);
++	}
++#endif
+ 	mach_call = (mach_call_t)mach_trap_table[call_number].mach_trap_function;
+ 
+ 	if (mach_call == (mach_call_t)kern_invalid) {
+@@ -289,6 +568,14 @@ skip_machcall:
+ 	    MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_END,
+ 	    retval, 0, 0, 0, 0);
+ 
++#if defined(XNU_SYSCALL_TRACE) && XNU_SYSCALL_TRACE
++	if (unixnu_st_start) {
++		uint64_t unixnu_st_args[4] = { args.arg1, args.arg2, args.arg3, args.arg4 };
++		unixnu_systrace_note(UNIXNU_SYSTRACE_BSD_SLOTS + (unsigned int)call_number,
++		    mach_trap_table[call_number].mach_trap_returns_port ? 0 : (int)retval,
++		    (uint64_t)retval, unixnu_st_args, -1, state, unixnu_st_start);
++	}
++#endif
+ 	arm_set_mach_syscall_ret(state, retval);
+ 
+ 	throttle_lowpri_io(1);
+diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
+index ae94c7e..5b6b73e 100644
+--- a/osfmk/arm64/sleh.c
++++ b/osfmk/arm64/sleh.c
+@@ -2277,6 +2277,13 @@ mach_syscall_trace_exit(unsigned int retval,
+ 	    DBG_FUNC_END, retval, 0, 0, 0, 0);
+ }
+ 
++#if defined(XNU_SYSCALL_TRACE) && XNU_SYSCALL_TRACE
++#include <kern/syscall_sw.h>
++#include <arm64/unixnu_systrace.h>
++extern struct proc *current_proc(void);
++extern int proc_pid(struct proc *);
++#endif
++
+ __attribute__((noreturn))
+ void
+ thread_syscall_return(kern_return_t error)
+@@ -2288,6 +2295,16 @@ thread_syscall_return(kern_return_t error)
+ 	state = get_user_regs(thread);
+ 
+ 	assert(is_saved_state64(state));
++#if defined(XNU_SYSCALL_TRACE) && XNU_SYSCALL_TRACE
++	if (unixnu_systrace_on() && unixnu_systrace_wants(proc_pid(current_proc()))) {
++		int number = -get_saved_state_svc_number(state);
++		if (number > 0 && number < MACH_TRAP_TABLE_COUNT) {
++			unixnu_systrace_note(UNIXNU_SYSTRACE_BSD_SLOTS + (unsigned int)number,
++			    mach_trap_table[number].mach_trap_returns_port ? 0 : (int)error,
++			    (uint64_t)error, saved_state64(state)->x, -1, state, 0);
++		}
++	}
++#endif
+ 	saved_state64(state)->x[0] = error;
+ 
+ #if MACH_ASSERT
+diff --git a/osfmk/arm64/unixnu_systrace.h b/osfmk/arm64/unixnu_systrace.h
+new file mode 100644
+index 0000000..658d471
+--- /dev/null
++++ b/osfmk/arm64/unixnu_systrace.h
+@@ -0,0 +1,33 @@
++/*
++ * Opt-in per-process syscall profile (build: XNU_SYSCALL_TRACE=1, runtime:
++ * boot-arg unixnu-systrace-pid). Implemented in osfmk/arm64/bsd_arm64.c.
++ */
++#ifndef _ARM64_UNIXNU_SYSTRACE_H_
++#define _ARM64_UNIXNU_SYSTRACE_H_
++
++#if defined(XNU_SYSCALL_TRACE) && XNU_SYSCALL_TRACE
++#include <stdint.h>
++#include <stdbool.h>
++
++struct arm_saved_state;
++
++/* BSD syscalls use slots [0, 600); Mach trap n uses slot 600 + n. */
++#define UNIXNU_SYSTRACE_BSD_SLOTS 600u
++
++extern int32_t unixnu_st_pid;
++extern char unixnu_st_name[33];
++
++/* Cheap gate checked before any per-call work; false unless a boot-arg is set. */
++static inline bool
++unixnu_systrace_on(void)
++{
++	return __builtin_expect(unixnu_st_pid >= 0 || unixnu_st_name[0] != 0, 0);
++}
++
++extern bool unixnu_systrace_wants(int pid);
++extern void unixnu_systrace_enter(unsigned int slot);
++extern void unixnu_systrace_note(unsigned int slot, int err, uint64_t ret, const uint64_t *args,
++    int path_arg, struct arm_saved_state *state, uint64_t start_abs);
++#endif /* XNU_SYSCALL_TRACE */
++
++#endif /* _ARM64_UNIXNU_SYSTRACE_H_ */
