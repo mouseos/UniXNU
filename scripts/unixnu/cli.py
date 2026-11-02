@@ -162,8 +162,7 @@ def cmd_build(ctx):
     if 'payload' in steps or 'runtime' in steps:
         runtime.prepare(ctx, kernel_build='kernel' in steps)
     if 'kernel' in steps:
-        kernel.build(ctx, modules)
-        kernel.prelink(ctx)
+        kernel.build_checked(ctx, modules)
     elif 'prelink' in steps:
         kernel.prelink(ctx)
     if 'package' in steps:

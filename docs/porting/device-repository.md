@@ -251,6 +251,8 @@ extra_args = []
 | --- | --- |
 | `defconfig` | File name under `configs/` |
 | `archives` | Archive builder scripts, run in order before the kernel link |
+| `source_reference_bootstrap` | Optional, default false. Builds and prelinks a first-pass kernel of this configuration from source; archive builders that audit original ABIs read it in the final pass (`UNIXNU_SOURCE_REFERENCE_PASS=final`). Requires `candidate_validator` |
+| `candidate_validator` | Optional device script, run with `--kernel FILE` on every prelinked kernel and before the payload packs it |
 | `tool` | Prelink tool path in the build tree |
 | `kernel` | Native kernel path in the build tree |
 | `kernelcache_sha256` | Pins the original kernelcache |

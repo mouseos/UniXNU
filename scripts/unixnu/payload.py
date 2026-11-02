@@ -110,6 +110,8 @@ def build(ctx, kernel=None):
     kernel = expand(kernel or getattr(args, 'kernel', None) or ctx.work / 'kernel/kernel.macho')
     if not kernel.is_file():
         raise Error(f'kernel not found: {kernel}; run "unixnu build kernel" or pass --kernel FILE')
+    from . import kernel as kernel_module
+    kernel_module.validate_candidate(ctx, kernel)
     extra = list(getattr(args, 'kernel_arg', None) or [])
     # An extra NAME=VALUE replaces the board's argument of the same name.
     names = {item.split('=', 1)[0] for item in extra}
