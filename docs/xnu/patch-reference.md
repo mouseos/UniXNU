@@ -24,6 +24,7 @@ Format 2 applies `[kernel] patch_series` in declared order. Series can reference
 | `armvirt-platform-personality` | Adds `ArmCpu`, `ArmVirtPlatform` and `ArmDTPlatform` personalities |
 | `native-smp-secondary` | Raises `MAX_CPUS` to 8 and uses MPIDR Affinity1 for BCM2837 secondary CPUs |
 | `native-arm-pan` | Enables ARMv8.1 PAN when `XNU_NATIVE_PAN` is set |
+| `native-ns16550-serial` | Adds a polled 16550 console to pe_serial when `XNU_NS16550_UART=1` |
 | `native-dt-panic-region` | Reads the panic log region from the device tree and validates it |
 
 ## Four-kilobyte pages

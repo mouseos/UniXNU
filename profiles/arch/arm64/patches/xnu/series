@@ -16,6 +16,7 @@
 ../../../../../patches/xnu/native-4k-user-abi.patch
 ../../../../../patches/xnu/native-aes-personality.patch
 ../../../../../patches/xnu/native-arm-pan.patch
+../../../../../patches/xnu/native-ns16550-serial.patch
 ../../../../../patches/xnu/native-dt-panic-region.patch
 ../../../../../patches/xnu/native-lookup-trace.patch
 ../../../../../patches/xnu/native-priv-work-interval.patch
