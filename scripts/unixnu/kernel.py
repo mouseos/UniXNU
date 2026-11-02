@@ -183,6 +183,13 @@ def build(ctx, modules):
         tool('xcodebuild', 'the kernel step builds with the Xcode iphoneos SDK')
     env.update(xnu_env(ctx))
     env.update(version_env(modules, ctx))
+    # The kernelcache and slide this configuration prelinks against: the static storage interface record
+    # (scripts/data/native-storage-interface-audit.json) binds block drivers only for the same pair.
+    prelink_spec = ctx.board.get('kernel', {}).get('prelink') or {}
+    if prelink_spec.get('kernelcache_sha256'):
+        env['UNIXNU_PRELINK_KERNELCACHE_SHA256'] = prelink_spec['kernelcache_sha256']
+    if prelink_spec.get('slide') is not None:
+        env['UNIXNU_PRELINK_SLIDE'] = str(prelink_spec['slide'])
     if ctx.schema_version == 2:
         env['UNIXNU_PATCH_LIST'] = str(patches.prepare(ctx, modules))
         generated = ctx.tree / 'build/generated'

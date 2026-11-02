@@ -113,6 +113,27 @@ The kernel step prepares the public `IOStorageFamily` headers under `build/stora
 
 `build-software-aes-bindings.py` and `build-adreno740-accelerator.py` use the recorded audit results in `scripts/data/` when the original hardware evidence is absent. The recorded addresses belong to the kernelcache pinned in `board.toml`.
 
+`build-virtio-mmio-bindings.py` binds `VirtioMmioBlock`, `RamBlock` and board block drivers (`--object`) to the original `IOBlockStorageDevice` of IOStorageFamily. Without `build/storage-abi/interface-audit.json` from `audit-storage-interface.py` it uses `scripts/data/native-storage-interface-audit.json`. That record holds addresses and symbol names only. `scripts/record-storage-interface.py` derives it from public inputs:
+
+- the reference name of each of the 190 dispatch slots, from `IOBlockStorageDevice.cpp` of the pinned IOStorageFamily source compiled against the xnu headers of `feeds.toml` (the object is inspected, never linked);
+- the original addresses in the pinned kernelcache: the one table whose kernel slots hold the kernel exports of those names, the protected constructor, the base destructor, the `brk #1` bodies of the abstract D1/D0 destructors, the metaclass and its static registration (`IOBlockStorageDevice`, parent `IOService`, sizes `0x90` and `0x88`);
+- the prelinked addresses, by adding the `[kernel.prelink]` slide.
+
+The record binds only for the kernelcache and slide it was derived from. `unixnu build kernel` passes the configuration's `[kernel.prelink]` `kernelcache_sha256` and `slide` to the archive builders (`UNIXNU_PRELINK_KERNELCACHE_SHA256`, `UNIXNU_PRELINK_SLIDE`); a board that binds storage drivers with the record therefore sets `kernelcache_sha256`, and any other pair stops the build.
+
+To regenerate the record, or to confirm it with `--check` (no file is written; the script fails on a difference):
+
+```bash
+./unixnu fetch -D ../UniXNU-<device>
+./unixnu tree -D ../UniXNU-<device>
+./unixnu ipsw fetch KernelCache -D ../UniXNU-<device>
+python3 scripts/record-storage-interface.py --board profiles/os/<os_profile>/profile.toml \
+  --kernelcache out/ipsw/<build>/kernelcache.decompressed \
+  --xnu out/<device>/tree/refer/xnu --iostoragefamily out/<device>/tree/refer/IOStorageFamily --check
+```
+
+`--xnu` and `--iostoragefamily` default to `refer/xnu` and `refer/IOStorageFamily` next to the script, as in the build tree. The script needs `clang` and runs on macOS and Linux.
+
 ## Build sequence
 
 1. `unixnu fetch` clones XNU, libpthread, corecrypto-2023 and the Apple references.
