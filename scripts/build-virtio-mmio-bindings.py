@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import struct
@@ -24,7 +25,23 @@ parser.add_argument('--object', help='object name in --directory (default: the c
 parser.add_argument('--block-class', help='IOBlockStorageDevice subclass in the object (default: the object name)')
 args = parser.parse_args()
 out = args.directory.resolve()
-audit = json.loads((ROOT / 'build/storage-abi/interface-audit.json').read_text())
+audit_path = ROOT / 'build/storage-abi/interface-audit.json'
+# Without the qualification evidence of audit-storage-interface.py (prelinked candidate, debugger snapshot, AES audit),
+# bind with the record of scripts/record-storage-interface.py, derived statically from the pinned kernelcache and the
+# public IOStorageFamily source. Its candidate addresses include the prelink slide.
+recorded = not audit_path.is_file()
+audit = json.loads((ROOT / 'scripts/data/native-storage-interface-audit.json' if recorded else audit_path).read_text())
+if recorded:
+    # The record holds addresses of one kernelcache at one slide. unixnu build kernel passes the [kernel.prelink] pins of
+    # the configuration; any other pair, or no pins, would bind wrong addresses.
+    pinned_cache = os.environ.get('UNIXNU_PRELINK_KERNELCACHE_SHA256')
+    pinned_slide = os.environ.get('UNIXNU_PRELINK_SLIDE')
+    if not pinned_cache or not pinned_slide:
+        raise SystemExit('The recorded storage interface needs the [kernel.prelink] kernelcache_sha256 and slide '
+                         '(UNIXNU_PRELINK_KERNELCACHE_SHA256, UNIXNU_PRELINK_SLIDE)')
+    if pinned_cache != audit['kernelcache_sha256'] or int(pinned_slide, 0) != int(audit['slide'], 0):
+        raise SystemExit('The recorded storage interface belongs to kernelcache ' + audit['kernelcache_sha256'] +
+                         ' at slide ' + audit['slide'] + ', not to the configured pins')
 canonical = {'NativeVirtioBlock': 'VirtioMmioBlock', 'NativeRamBlock': 'RamBlock'}.get(args.component, args.component)
 component = {'VirtioMmioBlock': 'NativeVirtioBlock', 'RamBlock': 'NativeRamBlock'}[canonical]
 if args.object:
@@ -38,7 +55,9 @@ mangled = str(len(block_class)) + block_class
 obj_path = out / (component + '.o')
 obj = obj_path.read_bytes()
 image = np.macho(obj)
-if not audit['live_native_4k'] or audit['method_slots'] != 190 or not audit['abstract_complete_destructors_trap']:
+qualified = (audit['metaclass_registration']['class_size'] == 0x90 and audit['metaclass_registration']['superclass_size'] == 0x88
+             if recorded else audit['live_native_4k'])
+if not qualified or audit['method_slots'] != 190 or not audit['abstract_complete_destructors_trap']:
     raise SystemExit('First qualify original live storage metadata and its real base functions')
 offset = next(at for cmd, at, size in image['commands'] if cmd == 2)
 sy, count, st, _ = struct.unpack_from('<4I', obj, offset + 8)
@@ -76,7 +95,14 @@ for row, actual in zip(audit['methods'], compiled):
 kernel_path = ROOT / 'build/xnu-prelink/native-apfs-load-positive.macho'
 # The binding values come from the recorded audit; the candidate only proves the audit's identity. Build products are pruned, so a
 # missing candidate is accepted (the audit JSON is the pinned record) while a present one must still match.
-if kernel_path.exists() and hashlib.sha256(kernel_path.read_bytes()).hexdigest() != audit['candidate_sha256']:
+if recorded:
+    # The record names the original kernelcache and slide; a present candidate plan must have been prelinked from them.
+    plan_path = kernel_path.with_suffix('.json')
+    if plan_path.exists():
+        plan = json.loads(plan_path.read_text())
+        if plan['original_sha256'] != audit['kernelcache_sha256'] or plan['slide'] != int(audit['slide'], 0):
+            raise SystemExit('Original binding input identity changed')
+elif kernel_path.exists() and hashlib.sha256(kernel_path.read_bytes()).hexdigest() != audit['candidate_sha256']:
     raise SystemExit('Original binding input identity changed')
 possible = {r['reference_name']: int(r['candidate_target'], 16) for r in audit['methods'] if not r['kernel_names']}
 possible.update({'__ZN20IOBlockStorageDeviceC2EPK11OSMetaClass': int(audit['original_protected_constructor'], 16),
