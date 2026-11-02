@@ -5,7 +5,7 @@
   */
  
 +/*
-+ * UniXNU opt-in (boot argument msidle=<process name>:<MB>): the named process never gets an inactive (idle)
++ * UniXNU opt-in (boot argument msidle=<process name>,<MB>): the named process never gets an inactive (idle)
 + * per-process memory limit below <MB>; its active limit is left alone, so crossing that one still reports.
 + * A limit of -1 or 0 (system-wide limit, or none) is left alone. For telling whether a daemon is killed when it
 + * goes idle for a footprint it needs; without the argument nothing changes.
@@ -29,10 +29,10 @@
 +		return;
 +	}
 +	arg[sizeof(arg) - 1] = '\0';
-+	while (arg[colon] && arg[colon] != ':') {
++	while (arg[colon] && arg[colon] != ',') {
 +		colon++;
 +	}
-+	if (arg[colon] != ':' || colon == 0 || colon > 2 * MAXCOMLEN) {
++	if (arg[colon] != ',' || colon == 0 || colon > 2 * MAXCOMLEN) {
 +		return;
 +	}
 +	for (size_t i = colon + 1; arg[i] >= '0' && arg[i] <= '9' && mb < 100000; i++) {
@@ -108,7 +108,7 @@
  #endif /* CONFIG_COREDUMP */
  
 +	/*
-+	 * UniXNU opt-in (the process named by msidle=<name>:<MB> only): what the footprint is made of when a limit is
++	 * UniXNU opt-in (the process named by msidle=<name>,<MB> only): what the footprint is made of when a limit is
 +	 * crossed, in KB, so an IOKit (GPU) mapping can be told from the process's own dirty memory.
 +	 */
 +#if CONFIG_MEMORYSTATUS

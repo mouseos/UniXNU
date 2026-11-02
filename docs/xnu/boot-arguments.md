@@ -95,11 +95,11 @@ if (PE_parse_boot_argn("my-driver-stage", &stage, sizeof(stage))) {
 | Storage detail | `native-ufs-root=1 native-ufs-stats-delay=30` |
 | Display detail | `offline-legacy-gop=1 offline-legacy-phase=<n>` |
 | Code signing detail | `cs_debug=<mask>` |
-| Daemon killed when it goes idle | `msidle=<process name>:<MB>` |
+| Daemon killed when it goes idle | `msidle=<process name>,<MB>` |
 
 A panic log records the last kernel output. The embedded panic region is read from the device tree when `XNU_DT_PANIC_REGION` is set.
 
-`msidle=<process name>:<MB>` (patch `zzzzz-memorystatus-idle-floor`) keeps that process's inactive (idle) memory limit at
+`msidle=<process name>,<MB>` (a comma: payload arguments allow no colon; patch `zzzzz-memorystatus-idle-floor`) keeps that process's inactive (idle) memory limit at
 least `<MB>`; its active limit is unchanged. When the process crosses a limit, the kernel prints
 `unixnu msidle ... footprint=... internal=... iokit_mapped=... graphics=... (KB)`, so an IOKit or GPU mapping can be told
 from the process's own memory. Without the argument nothing changes.
