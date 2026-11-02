@@ -23,7 +23,9 @@ V9_SHA='df5d6ebda4d0cb2faea663e6bb393e6e12fcf9f52a197ffd58e6f75274a076ab'
 HID_TEXT_SHA='7e4c5104814f2e773d5be13d092dec53ee44ba5a61a81264b229780406e86b72'
 # [kernel] source_reference_bootstrap: the final pass audits the first-pass kernel of this configuration.
 REFERENCE_FINAL=os.environ.get('UNIXNU_SOURCE_REFERENCE_PASS')=='final'
-p=(ROOT.parent/'kernel/kernel.macho' if REFERENCE_FINAL
+if REFERENCE_FINAL and not os.environ.get('UNIXNU_SOURCE_REFERENCE_KERNEL'):
+    raise SystemExit('The final reference pass needs UNIXNU_SOURCE_REFERENCE_KERNEL')
+p=(Path(os.environ['UNIXNU_SOURCE_REFERENCE_KERNEL']) if REFERENCE_FINAL
    else ROOT/'build/xnu-prelink/native-owner-ufs-cpu-desktop-v9-hid-init-candidate.macho')
 if not p.exists() and not REFERENCE_FINAL:
     later=sorted((ROOT/'build/xnu-prelink').glob('native-owner-ufs-cpu-desktop-*-candidate.macho'),key=lambda f:f.stat().st_mtime)
