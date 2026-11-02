@@ -1,0 +1,120 @@
+--- a/bsd/kern/kern_memorystatus.c
++++ b/bsd/kern/kern_memorystatus.c
+@@ -181,6 +181,70 @@
+  * soon be in effect down in the ledgers.
+  */
+ 
++/*
++ * UniXNU opt-in (boot argument msidle=<process name>:<MB>): the named process never gets an inactive (idle)
++ * per-process memory limit below <MB>; its active limit is left alone, so crossing that one still reports.
++ * A limit of -1 or 0 (system-wide limit, or none) is left alone. For telling whether a daemon is killed when it
++ * goes idle for a footprint it needs; without the argument nothing changes.
++ */
++static int memorystatus_unixnu_idle_state; /* 0 unread, 1 none, 2 set */
++static char memorystatus_unixnu_idle_name[2 * MAXCOMLEN + 1];
++static int32_t memorystatus_unixnu_idle_mb;
++
++static void
++memorystatus_unixnu_idle_read(void)
++{
++	char arg[2 * MAXCOMLEN + 16] = "";
++	size_t colon = 0;
++	int32_t mb = 0;
++
++	if (memorystatus_unixnu_idle_state != 0) {
++		return;
++	}
++	memorystatus_unixnu_idle_state = 1;
++	if (!PE_parse_boot_arg_str("msidle", arg, sizeof(arg))) {
++		return;
++	}
++	arg[sizeof(arg) - 1] = '\0';
++	while (arg[colon] && arg[colon] != ':') {
++		colon++;
++	}
++	if (arg[colon] != ':' || colon == 0 || colon > 2 * MAXCOMLEN) {
++		return;
++	}
++	for (size_t i = colon + 1; arg[i] >= '0' && arg[i] <= '9' && mb < 100000; i++) {
++		mb = mb * 10 + (arg[i] - '0');
++	}
++	if (mb <= 0) {
++		return;
++	}
++	memcpy(memorystatus_unixnu_idle_name, arg, colon);
++	memorystatus_unixnu_idle_name[colon] = '\0';
++	memorystatus_unixnu_idle_mb = mb;
++	memorystatus_unixnu_idle_state = 2;
++}
++
++/* Also used by task.c to print what the footprint is made of when this process crosses a limit. */
++bool memorystatus_unixnu_idle_match(const char *name);
++bool
++memorystatus_unixnu_idle_match(const char *name)
++{
++	memorystatus_unixnu_idle_read();
++	return memorystatus_unixnu_idle_state == 2 && name &&
++	       strncmp(name, memorystatus_unixnu_idle_name, sizeof(memorystatus_unixnu_idle_name)) == 0;
++}
++
++static int32_t
++memorystatus_unixnu_idle_floor(proc_t p, int32_t limit)
++{
++	if (limit <= 0 || !memorystatus_unixnu_idle_match(p->p_name) || limit >= memorystatus_unixnu_idle_mb) {
++		return limit;
++	}
++	printf("unixnu msidle pid=%d name=%s inactive limit %dMB raised to %dMB\n", proc_getpid(p), p->p_name, limit,
++	    memorystatus_unixnu_idle_mb);
++	return memorystatus_unixnu_idle_mb;
++}
++
+ #define SET_ACTIVE_LIMITS_LOCKED(p, limit, is_fatal)                    \
+ MACRO_BEGIN                                                             \
+ (p)->p_memstat_memlimit_active = (limit);                               \
+@@ -193,7 +257,7 @@
+ 
+ #define SET_INACTIVE_LIMITS_LOCKED(p, limit, is_fatal)                  \
+ MACRO_BEGIN                                                             \
+-(p)->p_memstat_memlimit_inactive = (limit);                             \
++(p)->p_memstat_memlimit_inactive = memorystatus_unixnu_idle_floor((p), (limit)); \
+    if (is_fatal) {                                                      \
+ 	   (p)->p_memstat_state |= P_MEMSTAT_MEMLIMIT_INACTIVE_FATAL;   \
+    } else {                                                             \
+--- a/osfmk/kern/task.c
++++ b/osfmk/kern/task.c
+@@ -7109,6 +7109,35 @@
+ 	}
+ #endif /* CONFIG_COREDUMP */
+ 
++	/*
++	 * UniXNU opt-in (the process named by msidle=<name>:<MB> only): what the footprint is made of when a limit is
++	 * crossed, in KB, so an IOKit (GPU) mapping can be told from the process's own dirty memory.
++	 */
++	{
++		extern bool memorystatus_unixnu_idle_match(const char *name);
++		if (cur_bsd_info != NULL && memorystatus_unixnu_idle_match(procname)) {
++			const int ms_index[] = {
++				task_ledgers.phys_footprint, task_ledgers.internal, task_ledgers.internal_compressed,
++				task_ledgers.iokit_mapped, task_ledgers.alternate_accounting, task_ledgers.alternate_accounting_compressed,
++				task_ledgers.page_table, task_ledgers.purgeable_nonvolatile, task_ledgers.purgeable_nonvolatile_compressed,
++				task_ledgers.tagged_footprint, task_ledgers.graphics_footprint, task_ledgers.wired_mem, task_ledgers.phys_mem,
++			};
++			ledger_amount_t ms_kb[sizeof(ms_index) / sizeof(ms_index[0])];
++			for (unsigned i = 0; i < sizeof(ms_index) / sizeof(ms_index[0]); i++) {
++				ledger_amount_t amount = 0;
++				if (ledger_get_balance(task->ledger, ms_index[i], &amount) != KERN_SUCCESS) {
++					amount = -1024;
++				}
++				ms_kb[i] = amount / 1024;
++			}
++			printf("unixnu msidle pid=%d name=%s crossed=%dMB footprint=%lld internal=%lld compressed=%lld iokit_mapped=%lld "
++			    "alternate=%lld alternate_compressed=%lld page_table=%lld purgeable=%lld purgeable_compressed=%lld "
++			    "tagged=%lld graphics=%lld wired=%lld phys_mem=%lld (KB)\n", pid, procname, max_footprint_mb,
++			    ms_kb[0], ms_kb[1], ms_kb[2], ms_kb[3], ms_kb[4], ms_kb[5], ms_kb[6], ms_kb[7], ms_kb[8], ms_kb[9],
++			    ms_kb[10], ms_kb[11], ms_kb[12]);
++		}
++	}
++
+ 	if (disable_exc_resource) {
+ 		printf("process %s[%d] crossed memory high watermark (%d MB); EXC_RESOURCE "
+ 		    "suppressed by a boot-arg.\n", procname, pid, max_footprint_mb);
