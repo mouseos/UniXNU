@@ -2,7 +2,15 @@
 """Build the staged AGXAccelerator class (drivers/Adreno740/NativeAdrenoAccelerator.cpp) against the audited original
 IOAcceleratorES imports, as a "late" archive: its static initializer is removed from __mod_init_func and exported so the board
 probe runs it after the original IOGPUFamily kext has loaded. Same binding recipe as build-native-accelerator-abi.py (exact
-original constructor, destructor and metaclass addresses from build/gpu-analysis/ioaccelerator-base-abi.json)."""
+original constructor, destructor and metaclass addresses from build/gpu-analysis/ioaccelerator-base-abi.json).
+
+--source FILE builds another accelerator class of the same shape instead, for a board GPU (for example a device package's
+kits/<kit>/powervr/NativePowerVRAccelerator.cpp): a direct IOAcceleratorES subclass whose only original imports are the base's
+constructor, destructor and metaclass. Headers beside the source are found. Its staged initializer is
+__GLOBAL__sub_I_<file name>, its archive build/native-accelerator/<stem>/lib<stem>.late.a, and --into ARCHIVE adds the staged
+objects to that archive (the board archive whose code runs the initializer) instead of libAdreno740.a. Without --source
+nothing changes."""
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -11,8 +19,14 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / 'build/adreno740-accelerator'
-OUT.mkdir(exist_ok=True)
+parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+parser.add_argument('--source', type=Path, help='accelerator source, relative to the build tree (default drivers/Adreno740/NativeAdrenoAccelerator.cpp)')
+parser.add_argument('--into', type=Path, help='archive, relative to the build tree, that receives the staged objects (with --source)')
+options = parser.parse_args()
+if options.into and not options.source:
+    parser.error('--into goes with --source')
+OUT = ROOT / ('build/native-accelerator/' + options.source.stem if options.source else 'build/adreno740-accelerator')
+OUT.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(ROOT / 'kits/XnuPrelink'))
 from native_prelink import macho as ordinary_macho
 
@@ -50,8 +64,11 @@ if plan['operational_overrides'] or plan['instance_bytes'] != 136 or plan['virtu
     sys.exit('The audited original base is not the expected 136-byte, 168-entry class without operational overrides')
 
 record = json.loads((ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json').read_text().strip().rstrip(','))
-source = ROOT / 'drivers/Adreno740/NativeAdrenoAccelerator.cpp'
-obj = OUT / 'NativeAdrenoAccelerator.o'
+# Not resolved: kits/<kit> may be a link to the device repository, and the report names the source inside this tree.
+source = ROOT / options.source if options.source else ROOT / 'drivers/Adreno740/NativeAdrenoAccelerator.cpp'
+if not source.is_file():
+    sys.exit('No accelerator source %s' % source)
+obj = OUT / (source.stem + '.o')
 cmd, i, args = [], 0, record['arguments']
 while i < len(args):
     v = args[i]
@@ -70,6 +87,8 @@ while i < len(args):
 cmd += ['-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-Wno-unnecessary-virtual-specifier', '-Wno-c99-designator',
         '-Wno-reorder-init-list', '-Wno-deprecated-enum-enum-conversion', '-Wno-overloaded-virtual',
         '-I', str(ROOT / '.cache/xnu-work/osfmk')]
+if options.source:
+    cmd += ['-I', str(source.parent)]
 subprocess.run(cmd, cwd=record['directory'], check=True)
 
 raw = obj.read_bytes()
@@ -113,9 +132,9 @@ else:
 run(['xcrun', 'clang', '-target', TRIPLE, '-isysroot', sdk, '-c', asm, '-o', OUT / 'original-bindings.o'])
 
 llvm = Path(run(['brew', '--prefix', 'llvm'], text=True).strip()) / 'bin'
-late = OUT / 'NativeAdrenoAccelerator.late.o'
+late = OUT / (source.stem + '.late.o')
 run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func',
-     '--globalize-symbol=__GLOBAL__sub_I_NativeAdrenoAccelerator.cpp', obj, late])
+     '--globalize-symbol=__GLOBAL__sub_I_' + source.name, obj, late])
 
 
 def code(p):
@@ -126,17 +145,20 @@ def code(p):
 
 if code(obj) != code(late):
     sys.exit('Only the owned initializer registration may change')
-archive = OUT / 'libAdreno740Accelerator.late.a'
+archive = OUT / ('lib%s.late.a' % source.stem if options.source else 'libAdreno740Accelerator.late.a')
 archive.unlink(missing_ok=True)
 run(['xcrun', 'ar', 'rcs', archive, late, *binding_objects])
-# The kernel links libAdreno740.a; the staged class rides in it (its initializer is not in __mod_init_func).
-native = ROOT / 'build/adreno740/libAdreno740.a'
+# The kernel links libAdreno740.a (or the --into archive); the staged class rides in it (its initializer is not in __mod_init_func).
+native = ROOT / options.into if options.into else ROOT / 'build/adreno740/libAdreno740.a'
+if options.into and not native.is_file():
+    sys.exit('No archive %s to add the staged class to' % native)
 if native.exists():
     run(['xcrun', 'ar', 'rcs', native, late, *binding_objects])
 (OUT / 'build-report.json').write_text(json.dumps(dict(
     # The header the source includes (#include "../AdrenoMetal/OriginalAcceleratorABI.h", beside the driver's own checkout).
     source_sha256={str(source.relative_to(ROOT)): sha(source),
-                   'OriginalAcceleratorABI.h': sha(source.resolve().parent.parent / 'AdrenoMetal/OriginalAcceleratorABI.h')},
+                   'OriginalAcceleratorABI.h': sha(source.parent / 'OriginalAcceleratorABI.h' if options.source
+                                                   else source.resolve().parent.parent / 'AdrenoMetal/OriginalAcceleratorABI.h')},
     archive_sha256=sha(archive), original_abi_sha256=sha(plan_path), bindings={n: hex(a) for n, a in bindings.items()},
     original_instructions_modified=False, runtime_qualified=False), indent=2) + '\n')
-print('PASS: staged AGXAccelerator builds against the audited original IOAcceleratorES imports')
+print('PASS: staged %s builds against the audited original IOAcceleratorES imports' % (source.name if options.source else 'AGXAccelerator'))
