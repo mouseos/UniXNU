@@ -256,6 +256,8 @@ extra_args = []
 | --- | --- |
 | `defconfig` | `configs/` 下的文件名 |
 | `archives` | 静态库脚本，在链接内核前按顺序执行 |
+| `source_reference_bootstrap` | 可选，默认 false。先从源码构建并预链接本配置的第一遍内核；审计原始 ABI 的归档构建脚本在最终一遍读取它（`UNIXNU_SOURCE_REFERENCE_PASS=final`）。需要 `candidate_validator` |
+| `candidate_validator` | 可选的设备脚本，对每个预链接内核以 `--kernel FILE` 运行，payload 打包前也运行 |
 | `tool` | 构建树中的预链接工具 |
 | `kernel` | 构建树中的原生内核 |
 | `kernelcache_sha256` | 固定原始 kernelcache |
