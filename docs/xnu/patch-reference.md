@@ -24,6 +24,8 @@ Format 2 applies `[kernel] patch_series` in declared order. Series can reference
 | `armvirt-platform-personality` | Adds `ArmCpu`, `ArmVirtPlatform` and `ArmDTPlatform` personalities |
 | `native-smp-secondary` | Raises `MAX_CPUS` to 8 and uses MPIDR Affinity1 for BCM2837 secondary CPUs |
 | `native-arm-pan` | Enables ARMv8.1 PAN when `XNU_NATIVE_PAN` is set |
+| `native-board-init-hook` | Calls the board hook `unixnu_board_init()` from bsd_init when `XNU_BOARD_INIT=1` |
+| `zz-native-board-launch-hook` | Calls the board hook `unixnu_board_launch()` before launchd when `XNU_BOARD_LAUNCH=1` |
 | `native-dt-panic-region` | Reads the panic log region from the device tree and validates it |
 
 ## Four-kilobyte pages
