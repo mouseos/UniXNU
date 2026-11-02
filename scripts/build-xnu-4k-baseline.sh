@@ -757,7 +757,8 @@ import hashlib
 records = [json.loads(Path(p).with_name('bindings.json').read_text()) for p in sys.argv[1:]]
 for archive, record in zip(sys.argv[1:], records):
     path = Path(archive)
-    obj = path.with_name(path.stem.removeprefix('lib') + '.o')
+    # The bindings name their object: the archive is named after the component, the object after its runtime class.
+    obj = path.with_name(record.get('object') or path.stem.removeprefix('lib') + '.o')
     if hashlib.sha256(obj.read_bytes()).hexdigest() != record['compiled_object_sha256']:
         raise SystemExit('Re-audit the actual compiled storage object before linking')
 first, second = [record['bindings'] for record in records]
