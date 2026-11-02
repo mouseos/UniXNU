@@ -123,7 +123,9 @@ subprocess.run(['xcrun', 'clang', '-target', TRIPLE, '-Werror', '-Wno-incompatib
 archive = out / ('lib' + canonical + '.a')
 archive.unlink(missing_ok=True)
 subprocess.run(['xcrun', 'ar', 'rcs', archive, obj_path, out / 'original-bindings.o'], check=True)
-(out / 'bindings.json').write_text(json.dumps(dict(original_candidate_sha256=audit['candidate_sha256'],
+identity = (dict(original_kernelcache_sha256=audit['kernelcache_sha256'], original_slide=audit['slide'], recorded_audit=True)
+            if recorded else dict(original_candidate_sha256=audit['candidate_sha256']))
+(out / 'bindings.json').write_text(json.dumps(dict(**identity,
     compiled_object_sha256=hashlib.sha256(obj).hexdigest(), virtual_methods_checked=190,
     concrete_overrides=overrides, unresolved_original_imports=0,
     bindings={name: hex(value) for name, value in bindings.items()}, original_code_modified=False,
