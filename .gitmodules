@@ -33,7 +33,7 @@
 	url = https://github.com/mouseos/GopFramebuffer.git
 [submodule "drivers/NativeRamBlock"]
 	path = drivers/NativeRamBlock
-	url = https://github.com/mouseos/RamBlock.git
+	url = https://github.com/UniXNU/NativeRamBlock.git
 [submodule "drivers/NativeUfs"]
 	path = drivers/NativeUfs
 	url = https://github.com/UniXNU/NativeUfs.git
