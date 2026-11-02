@@ -54,3 +54,4 @@
 ../../../../../patches/xnu/zzy-staged-system-apps.patch
 ../../../../../patches/xnu/zzyb-native-cryptex-os-view.patch
 ../../../../../patches/xnu/zzyc-owner-skip-launch-constraints.patch
+../../../../../patches/xnu/zzzzz-low-globals-below.patch
