@@ -596,6 +596,14 @@ if [ "$BOARD_LAUNCH" != 0 ] && [ "$BOARD_LAUNCH" != 1 ]; then
   exit 1
 fi
 if [ "$BOARD_LAUNCH" = 1 ]; then EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOARD_LAUNCH=1"; fi
+# Low globals 512 MiB lower (patches/xnu/zzzzz-low-globals-below.patch), for boards whose loader hands XNU memory far below
+# the kernel (DarwinBoot darwinboot-memory-floor). Only a board that selects it changes the kernel flags.
+LOW_GLOBALS_BELOW=${XNU_LOW_GLOBALS_BELOW:-0}
+if [ "$LOW_GLOBALS_BELOW" != 0 ] && [ "$LOW_GLOBALS_BELOW" != 1 ]; then
+  echo 'XNU_LOW_GLOBALS_BELOW must be 0 or 1' >&2
+  exit 1
+fi
+if [ "$LOW_GLOBALS_BELOW" = 1 ]; then EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_LOW_GLOBALS_BELOW=1"; fi
 if [ "$NATIVE_PAN" = 1 ]; then
   EXTRA_MAKE_ARGS+=("copyio.o_CFLAGS_ADD=-march=armv8.1-a")
   EXTRA_MAKE_ARGS+=("pcb.o_CFLAGS_ADD=-march=armv8.1-a")

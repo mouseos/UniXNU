@@ -57,3 +57,4 @@
 ../../../../../patches/xnu/zzyb-native-cryptex-os-view.patch
 ../../../../../patches/xnu/zzyc-owner-skip-launch-constraints.patch
 ../../../../../patches/xnu/zz-native-board-launch-hook.patch
+../../../../../patches/xnu/zzzzz-low-globals-below.patch

@@ -28,6 +28,7 @@ Format 2 applies `[kernel] patch_series` in declared order. Series can reference
 | `native-board-init-hook` | Calls the board hook `unixnu_board_init()` from bsd_init when `XNU_BOARD_INIT=1` |
 | `zz-native-board-launch-hook` | Calls the board hook `unixnu_board_launch()` before launchd when `XNU_BOARD_LAUNCH=1` |
 | `native-dt-panic-region` | Reads the panic log region from the device tree and validates it |
+| `zzzzz-low-globals-below` | Optional (`CONFIG_XNU_LOW_GLOBALS_BELOW`): moves the 4 KiB, non-large-memory low globals 512 MiB lower (0xffffffefe0000000), gives their L1 block an L2 table, and records the address in `__DATA_CONST,__lowglo_base` for DarwinBoot. The kernel's static region may then start down to 0xffffffefe0800000, so a loader can hand XNU memory far below the kernel (`[payload.adt] memory_floor`). Debuggers that expect the low globals at 0xfffffff000000000 do not find them there |
 
 ## Four-kilobyte pages
 

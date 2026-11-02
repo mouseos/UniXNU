@@ -30,6 +30,7 @@
 | `native-board-init-hook` | `XNU_BOARD_INIT=1` 时由 bsd_init 调用板级钩子 `unixnu_board_init()` |
 | `zz-native-board-launch-hook` | `XNU_BOARD_LAUNCH=1` 时在 launchd 之前调用板级钩子 `unixnu_board_launch()` |
 | `native-dt-panic-region` | 从设备树读取并校验 panic 日志区域 |
+| `zzzzz-low-globals-below` | 可选（`CONFIG_XNU_LOW_GLOBALS_BELOW`）：把 4 KiB、非大内存配置的 low globals 下移 512 MiB（0xffffffefe0000000），为其 L1 块建立 L2 表，并在 `__DATA_CONST,__lowglo_base` 中记录地址供 DarwinBoot 读取。内核静态区因此可从 0xffffffefe0800000 开始，加载器可以把内核之下很远的内存交给 XNU（`[payload.adt] memory_floor`）。依赖 0xfffffff000000000 固定地址查找 low globals 的调试器将找不到它们 |
 
 ## 4 KiB 页
 
